@@ -73,7 +73,7 @@ func NewService(name string, transport Transport, handler any) *Service {
 // service will receive requests.
 func (s *Service) Start() error {
 	serviceDebug.Tracef("Starting service %s", s.Name)
-	
+
 	if s.Transport == nil {
 		serviceDebug.Trace("Transport not provided")
 		return fmt.Errorf(
@@ -94,11 +94,12 @@ func (s *Service) Start() error {
 	serviceDebug.Trace("Binding dispatch handler")
 	err = s.Transport.BindDispatch(s.Name, func(res http.ResponseWriter, req *http.Request) {
 		serviceHandleDebug.Tracef("Handling request %s %s", req.Method, req.URL.Path)
-		
+
 		ctx := navaros.NewContext(res, req, s.Handler)
 		ctx.Next()
 		navaros.CtxFinalize(ctx)
-		
+		navaros.CtxFree(ctx)
+
 		serviceHandleDebug.Tracef("Completed handling request %s %s", req.Method, req.URL.Path)
 	})
 	if err != nil {
@@ -120,28 +121,28 @@ func (s *Service) Start() error {
 // This provides a way to dispose of the service if need be.
 func (s *Service) Stop() {
 	serviceDebug.Tracef("Stopping service %s", s.Name)
-	
+
 	serviceDebug.Trace("Unbinding gateway announcement handler")
 	if err := s.Transport.UnbindGatewayAnnounce(); err != nil {
 		serviceDebug.Tracef("Failed to unbind gateway announcement handler: %v", err)
 		panic(err)
 	}
-	
+
 	serviceDebug.Trace("Unbinding dispatch handler")
 	if err := s.Transport.UnbindDispatch(s.Name); err != nil {
 		serviceDebug.Tracef("Failed to unbind dispatch handler: %v", err)
 		panic(err)
 	}
-	
+
 	serviceDebug.Trace("Closing stop channel")
 	close(s.stopChan)
-	
+
 	serviceDebug.Tracef("Service %s stopped successfully", s.Name)
 }
 
 func (s *Service) handleGatewayAnnounce(gatewayDescriptor *GatewayDescriptor) {
 	serviceAnnounceDebug.Tracef("Received gateway announcement from %s", gatewayDescriptor.Name)
-	
+
 	isWantedGateway := len(s.GatewayNames) == 0
 	if !isWantedGateway {
 		for _, name := range s.GatewayNames {
@@ -165,7 +166,7 @@ func (s *Service) handleGatewayAnnounce(gatewayDescriptor *GatewayDescriptor) {
 			break
 		}
 	}
-	
+
 	if !foundSelf {
 		serviceAnnounceDebug.Trace("Service not found in gateway's service index, announcing service")
 		if err := s.doAnnounce(); err != nil {
@@ -178,22 +179,22 @@ func (s *Service) handleGatewayAnnounce(gatewayDescriptor *GatewayDescriptor) {
 // Run starts the service and blocks until the service is stopped.
 func (s *Service) Run() error {
 	serviceDebug.Tracef("Running service %s", s.Name)
-	
+
 	if err := s.Start(); err != nil {
 		serviceDebug.Tracef("Failed to start service: %v", err)
 		return err
 	}
-	
+
 	serviceDebug.Trace("Waiting for service to be stopped")
 	<-s.stopChan
-	
+
 	serviceDebug.Trace("Service run completed")
 	return nil
 }
 
 func (s *Service) doAnnounce() error {
 	serviceAnnounceDebug.Tracef("Service %s announcing to gateways", s.Name)
-	
+
 	routeDescriptors := s.RouteDescriptors
 
 	if routeDescriptors == nil {
@@ -208,7 +209,7 @@ func (s *Service) doAnnounce() error {
 			}
 		}
 	}
-	
+
 	if len(routeDescriptors) > 0 {
 		serviceAnnounceDebug.Tracef("Announcing %d routes", len(routeDescriptors))
 		for _, route := range routeDescriptors {
@@ -217,7 +218,7 @@ func (s *Service) doAnnounce() error {
 	} else {
 		serviceAnnounceDebug.Trace("No routes to announce")
 	}
-	
+
 	return s.Transport.AnnounceService(&ServiceDescriptor{
 		Name:             s.Name,
 		GatewayNames:     s.GatewayNames,
