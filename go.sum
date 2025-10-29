@@ -1,5 +1,7 @@
 github.com/RobertWHurst/navaros v1.8.0 h1:N+ti97IV4PBZnlcwM71pjQ+3UNwAAkmQ+nnm5VsRBMw=
 github.com/RobertWHurst/navaros v1.8.0/go.mod h1:S7bTXksx7o0fD5mi0sNCClk2cWYsv3kxhnhBiPpcYHQ=
+github.com/RobertWHurst/navaros v1.13.2 h1:wkGT8HLqQd6Pa+MDhlZdVH5lxV7iBAqXays47rnXuvk=
+github.com/RobertWHurst/navaros v1.13.2/go.mod h1:0QO7XN4pS+fvI6UqNYcHFaYSO1L8J56TCrJvYD7T3eQ=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/grafana/regexp v0.0.0-20240518133315-a468a5bfb3bc h1:GN2Lv3MGO7AS6PrRoT6yV5+wkrOpcszoIsO4+4ds248=
