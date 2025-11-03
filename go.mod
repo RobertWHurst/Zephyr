@@ -1,4 +1,4 @@
-module github.com/telemetrytv/zephyr
+module github.com/RobertWHurst/zephyr
 
 go 1.24.2
 

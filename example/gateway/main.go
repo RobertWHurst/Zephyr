@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/RobertWHurst/zephyr"
+	natstransport "github.com/RobertWHurst/zephyr/nats-transport"
 	"github.com/nats-io/nats.go"
-	"github.com/telemetrytv/zephyr"
-	natstransport "github.com/telemetrytv/zephyr/nats-transport"
 )
 
 func main() {

@@ -1,8 +1,8 @@
 package natstransport
 
 import (
+	"github.com/RobertWHurst/zephyr"
 	"github.com/nats-io/nats.go"
-	"github.com/telemetrytv/zephyr"
 	"github.com/vmihailenco/msgpack/v5"
 )
 

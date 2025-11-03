@@ -1,18 +1,18 @@
 package localtransport
 
-import "github.com/telemetrytv/zephyr"
+import "github.com/RobertWHurst/zephyr"
 
 func (c *LocalTransport) AnnounceService(serviceDescriptor *zephyr.ServiceDescriptor) error {
-	transportLocalAnnounceDebug.Tracef("Announcing service %s with %d routes", 
+	transportLocalAnnounceDebug.Tracef("Announcing service %s with %d routes",
 		serviceDescriptor.Name, len(serviceDescriptor.RouteDescriptors))
-	
+
 	handlerCount := len(c.serviceAnnounceHandlers)
 	transportLocalAnnounceDebug.Tracef("Notifying %d service announcement handlers", handlerCount)
-	
+
 	for _, handler := range c.serviceAnnounceHandlers {
 		handler(serviceDescriptor)
 	}
-	
+
 	transportLocalAnnounceDebug.Trace("Service announcement completed")
 	return nil
 }

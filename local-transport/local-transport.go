@@ -3,12 +3,12 @@ package localtransport
 import (
 	"net/http"
 
+	"github.com/RobertWHurst/zephyr"
 	"github.com/telemetrytv/trace"
-	"github.com/telemetrytv/zephyr"
 )
 
 var (
-	transportLocalDebug       = trace.Bind("zephyr:transport:local")
+	transportLocalDebug         = trace.Bind("zephyr:transport:local")
 	transportLocalDispatchDebug = trace.Bind("zephyr:transport:local:dispatch")
 	transportLocalAnnounceDebug = trace.Bind("zephyr:transport:local:announce")
 )

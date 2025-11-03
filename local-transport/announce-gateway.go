@@ -1,18 +1,18 @@
 package localtransport
 
-import "github.com/telemetrytv/zephyr"
+import "github.com/RobertWHurst/zephyr"
 
 func (c *LocalTransport) AnnounceGateway(gatewayDescriptor *zephyr.GatewayDescriptor) error {
 	transportLocalAnnounceDebug.Tracef("Announcing gateway %s with %d services",
 		gatewayDescriptor.Name, len(gatewayDescriptor.ServiceDescriptors))
-	
+
 	handlerCount := len(c.gatewayAnnounceHandlers)
 	transportLocalAnnounceDebug.Tracef("Notifying %d gateway announcement handlers", handlerCount)
-	
+
 	for _, handler := range c.gatewayAnnounceHandlers {
 		handler(gatewayDescriptor)
 	}
-	
+
 	transportLocalAnnounceDebug.Trace("Gateway announcement completed")
 	return nil
 }
