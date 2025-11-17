@@ -5,7 +5,7 @@ go 1.24.2
 toolchain go1.24.5
 
 require (
-	github.com/RobertWHurst/navaros v1.14.1
+	github.com/RobertWHurst/navaros v1.14.2
 	github.com/nats-io/nats.go v1.47.0
 	github.com/stretchr/testify v1.11.1
 	github.com/telemetrytv/trace v1.2.0
