@@ -135,13 +135,25 @@ func (c *NatsTransport) Dispatch(serviceName string, res http.ResponseWriter, re
 		transportNatsDispatchDebug.Tracef("Failed to subscribe to response subject %s: %v", responseSubject, err)
 		return err
 	}
-	
+	defer func() {
+		transportNatsDispatchDebug.Trace("Unsubscribing from response subject")
+		if err := responseSub.Unsubscribe(); err != nil {
+			transportNatsDispatchDebug.Tracef("Failed to unsubscribe from response subject: %v", err)
+		}
+	}()
+
 	transportNatsDispatchDebug.Tracef("Setting up response body subscription to %s", responseBodySubject)
 	responseBodySub, err := c.NatsConnection.SubscribeSync(responseBodySubject)
 	if err != nil {
 		transportNatsDispatchDebug.Tracef("Failed to subscribe to response body subject %s: %v", responseBodySubject, err)
 		return err
 	}
+	defer func() {
+		transportNatsDispatchDebug.Trace("Unsubscribing from response body subject")
+		if err := responseBodySub.Unsubscribe(); err != nil {
+			transportNatsDispatchDebug.Tracef("Failed to unsubscribe from response body subject: %v", err)
+		}
+	}()
 
 	transportNatsDispatchDebug.Tracef("Sending request to %s", requestSubject)
 	requestAckMsg, err := c.NatsConnection.Request(requestSubject, requestBytes, DispatchTimeout)
@@ -228,12 +240,6 @@ func (c *NatsTransport) Dispatch(serviceName string, res http.ResponseWriter, re
 		return err
 	}
 	
-	transportNatsDispatchDebug.Trace("Unsubscribing from response subject")
-	if err := responseSub.Unsubscribe(); err != nil {
-		transportNatsDispatchDebug.Tracef("Failed to unsubscribe from response subject: %v", err)
-		return err
-	}
-
 	transportNatsDispatchDebug.Trace("Unmarshaling response headers")
 	response := &Response{}
 	if err := msgpack.Unmarshal(responseMsg.Data, response); err != nil {
@@ -273,12 +279,6 @@ func (c *NatsTransport) Dispatch(serviceName string, res http.ResponseWriter, re
 			transportNatsDispatchDebug.Trace("Received final body chunk (EOF)")
 			break
 		}
-	}
-
-	transportNatsDispatchDebug.Trace("Unsubscribing from response body subject")
-	if err := responseBodySub.Unsubscribe(); err != nil {
-		transportNatsDispatchDebug.Tracef("Failed to unsubscribe from response body subject: %v", err)
-		return err
 	}
 
 	transportNatsDispatchDebug.Trace("Dispatch completed successfully")
@@ -478,6 +478,12 @@ func (c *NatsTransport) handleDispatch(msg *nats.Msg, handler func(res http.Resp
 		transportNatsDispatchDebug.Tracef("Failed to subscribe to request body subject: %v", err)
 		return err
 	}
+	defer func() {
+		transportNatsDispatchDebug.Trace("Unsubscribing from request body subject")
+		if err := reqBodySubscription.Unsubscribe(); err != nil {
+			transportNatsDispatchDebug.Tracef("Failed to unsubscribe from request body subject: %v", err)
+		}
+	}()
 
 	reqReader := &requestReader{
 		natsSubscription: reqBodySubscription,
@@ -565,6 +571,7 @@ func (c *NatsTransport) UnbindDispatch(serviceName string) error {
 				return err
 			}
 		}
+		delete(c.unbindDispatch, serviceName)
 	}
 	return nil
 }
