@@ -9,38 +9,41 @@ import (
 // HTTP method, and a path matching pattern. It is used by the zephyr gateway
 // to determine which service to dispatch a request to.
 type RouteDescriptor struct {
-	Method  string
-	Pattern *navaros.Pattern
+	Method   string
+	Pattern  *navaros.Pattern
+	Metadata any
+}
+
+type routeDescriptorMsgpack struct {
+	Method   string `msgpack:"Method"`
+	Pattern  string `msgpack:"Pattern"`
+	Metadata any    `msgpack:"Metadata,omitempty"`
 }
 
 // MarshalMsgpack returns the msgpack representation of the route descriptor.
 func (r *RouteDescriptor) MarshalMsgpack() ([]byte, error) {
-	return msgpack.Marshal(struct {
-		Method  string
-		Pattern string
-	}{
-		Method:  string(r.Method),
-		Pattern: r.Pattern.String(),
+	return msgpack.Marshal(routeDescriptorMsgpack{
+		Method:   r.Method,
+		Pattern:  r.Pattern.String(),
+		Metadata: r.Metadata,
 	})
 }
 
 // UnmarshalMsgpack parses the msgpack representation of the route descriptor.
 func (r *RouteDescriptor) UnmarshalMsgpack(data []byte) error {
-	fromMsgpackStruct := struct {
-		Method  string
-		Pattern string
-	}{}
-	if err := msgpack.Unmarshal(data, &fromMsgpackStruct); err != nil {
+	var raw routeDescriptorMsgpack
+	if err := msgpack.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 
-	pattern, err := navaros.NewPattern(fromMsgpackStruct.Pattern)
+	pattern, err := navaros.NewPattern(raw.Pattern)
 	if err != nil {
 		return err
 	}
 
-	r.Method = fromMsgpackStruct.Method
+	r.Method = raw.Method
 	r.Pattern = pattern
+	r.Metadata = raw.Metadata
 
 	return nil
 }

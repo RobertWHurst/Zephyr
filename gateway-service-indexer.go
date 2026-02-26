@@ -32,7 +32,7 @@ func (r *GatewayServiceIndexer) UnsetService(name string) error {
 	return nil
 }
 
-func (r *GatewayServiceIndexer) ResolveService(method string, path string) (string, bool) {
+func (r *GatewayServiceIndexer) ResolveService(method string, path string) (string, *RouteDescriptor, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, remoteService := range r.ServiceDescriptors {
@@ -44,9 +44,9 @@ func (r *GatewayServiceIndexer) ResolveService(method string, path string) (stri
 				continue
 			}
 			if _, isMatch := httpRoute.Pattern.Match(path); isMatch {
-				return remoteService.Name, true
+				return remoteService.Name, httpRoute, true
 			}
 		}
 	}
-	return "", false
+	return "", nil, false
 }

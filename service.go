@@ -203,8 +203,9 @@ func (s *Service) doAnnounce() error {
 			navarosRouteDescriptors := h.RouteDescriptors()
 			for _, navarosRouteDescriptor := range navarosRouteDescriptors {
 				routeDescriptors = append(routeDescriptors, &RouteDescriptor{
-					Method:  string(navarosRouteDescriptor.Method),
-					Pattern: navarosRouteDescriptor.Pattern,
+					Method:   string(navarosRouteDescriptor.Method),
+					Pattern:  navarosRouteDescriptor.Pattern,
+					Metadata: navarosRouteDescriptor.Metadata,
 				})
 			}
 		}

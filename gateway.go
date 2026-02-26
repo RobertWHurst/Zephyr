@@ -18,6 +18,10 @@ var (
 
 var GatewayAnnounceInterval = time.Duration((8 + rand.Intn(2))) * time.Second
 
+// ContextKeyRouteDescriptor is the key used to store the matched route
+// descriptor on the navaros context.
+const ContextKeyRouteDescriptor = "zephyr:route-descriptor"
+
 type Gateway struct {
 	Name      string
 	Transport Transport
@@ -127,7 +131,7 @@ func (g *Gateway) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	serviceName, ok := g.gsi.ResolveService(req.Method, req.URL.Path)
+	serviceName, _, ok := g.gsi.ResolveService(req.Method, req.URL.Path)
 	if !ok {
 		gatewayRouteDebug.Tracef("No service found for %s %s, returning 404", req.Method, req.URL.Path)
 		res.WriteHeader(404)
@@ -152,7 +156,7 @@ func (g *Gateway) CanServeHTTP(req *http.Request) bool {
 		return false
 	}
 
-	_, ok := g.gsi.ResolveService(req.Method, req.URL.Path)
+	_, _, ok := g.gsi.ResolveService(req.Method, req.URL.Path)
 	if ok {
 		gatewayRouteDebug.Tracef("Can serve %s %s", req.Method, req.URL.Path)
 	} else {
@@ -172,7 +176,7 @@ func (g *Gateway) Handle(ctx *navaros.Context) {
 		return
 	}
 
-	serviceName, ok := g.gsi.ResolveService(string(method), path)
+	serviceName, rd, ok := g.gsi.ResolveService(string(method), path)
 	if !ok {
 		gatewayRouteDebug.Tracef("No service found for %s %s, skipping to next handler", method, path)
 		ctx.Next()
@@ -180,6 +184,10 @@ func (g *Gateway) Handle(ctx *navaros.Context) {
 	}
 
 	gatewayRouteDebug.Tracef("Resolved %s %s to service %s", method, path, serviceName)
+
+	if rd != nil {
+		ctx.Set(ContextKeyRouteDescriptor, rd)
+	}
 
 	// This Panic is ok because it will be caught and handled by Navaros
 	if err := g.Transport.Dispatch(serviceName, ctx.ResponseWriter(), ctx.Request()); err != nil {
@@ -200,11 +208,49 @@ func (g *Gateway) CanHandle(ctx *navaros.Context) bool {
 		return false
 	}
 
-	_, ok := g.gsi.ResolveService(string(method), path)
+	_, _, ok := g.gsi.ResolveService(string(method), path)
 	if ok {
 		gatewayRouteDebug.Tracef("Can handle %s %s", method, path)
 	} else {
 		gatewayRouteDebug.Tracef("Cannot handle %s %s, no matching service", method, path)
 	}
 	return ok
+}
+
+// DescriptorMiddleware returns a navaros middleware that resolves the
+// matching route descriptor for the incoming request and sets it on the
+// context. Downstream middleware can retrieve it with
+// RouteDescriptorFromContext.
+func (g *Gateway) DescriptorMiddleware() navaros.HandlerFunc {
+	return func(ctx *navaros.Context) {
+		if g.gsi != nil {
+			method := string(ctx.Method())
+			path := ctx.Path()
+			if _, rd, ok := g.gsi.ResolveService(method, path); ok && rd != nil {
+				ctx.Set(ContextKeyRouteDescriptor, rd)
+			}
+		}
+		ctx.Next()
+	}
+}
+
+// DispatchMiddleware returns a navaros middleware that dispatches the
+// request to the resolved service. This is a convenience wrapper around
+// Handle for use with router.Use().
+func (g *Gateway) DispatchMiddleware() navaros.HandlerFunc {
+	return func(ctx *navaros.Context) {
+		g.Handle(ctx)
+	}
+}
+
+// RouteDescriptorFromContext retrieves the route descriptor that was set on
+// the context by DescriptorMiddleware or Handle. Returns nil if no descriptor
+// was set.
+func RouteDescriptorFromContext(ctx *navaros.Context) *RouteDescriptor {
+	v, ok := ctx.Get(ContextKeyRouteDescriptor)
+	if !ok {
+		return nil
+	}
+	rd, _ := v.(*RouteDescriptor)
+	return rd
 }
