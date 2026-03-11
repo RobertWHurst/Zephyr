@@ -4,12 +4,31 @@ import "sync"
 
 type GatewayServiceIndexer struct {
 	mu                 sync.Mutex
+	closed             bool
 	ServiceDescriptors []*ServiceDescriptor
+}
+
+func (r *GatewayServiceIndexer) Close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	r.ServiceDescriptors = nil
+}
+
+func (r *GatewayServiceIndexer) IsClosed() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.closed
 }
 
 func (r *GatewayServiceIndexer) SetServiceDescriptor(descriptor *ServiceDescriptor) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.closed {
+		return nil
+	}
+
 	for _, existingDescriptor := range r.ServiceDescriptors {
 		if existingDescriptor.Name == descriptor.Name {
 			existingDescriptor.RouteDescriptors = descriptor.RouteDescriptors
@@ -23,6 +42,11 @@ func (r *GatewayServiceIndexer) SetServiceDescriptor(descriptor *ServiceDescript
 func (r *GatewayServiceIndexer) UnsetService(name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.closed {
+		return nil
+	}
+
 	for i, service := range r.ServiceDescriptors {
 		if service.Name == name {
 			r.ServiceDescriptors = append(r.ServiceDescriptors[:i], r.ServiceDescriptors[i+1:]...)
@@ -35,6 +59,11 @@ func (r *GatewayServiceIndexer) UnsetService(name string) error {
 func (r *GatewayServiceIndexer) ResolveService(method string, path string) (string, *RouteDescriptor, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.closed {
+		return "", nil, false
+	}
+
 	for _, remoteService := range r.ServiceDescriptors {
 		if remoteService.UnreachableAt != nil {
 			continue

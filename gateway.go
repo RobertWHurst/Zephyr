@@ -105,13 +105,13 @@ func (g *Gateway) Start() error {
 func (g *Gateway) Stop() {
 	gatewayDebug.Tracef("Stopping gateway %s", g.Name)
 
-	if g.gsi == nil {
+	if g.gsi == nil || g.gsi.IsClosed() {
 		gatewayDebug.Trace("Gateway already stopped")
 		return
 	}
 
-	gatewayDebug.Trace("Clearing service indexer")
-	g.gsi = nil
+	gatewayDebug.Trace("Closing service indexer")
+	g.gsi.Close()
 
 	gatewayDebug.Trace("Unbinding service announce handler")
 	if err := g.Transport.UnbindServiceAnnounce(); err != nil {
