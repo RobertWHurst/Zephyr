@@ -288,9 +288,11 @@ func (c *NatsTransport) Dispatch(serviceName string, res http.ResponseWriter, re
 func (c *NatsTransport) BindDispatch(serviceName string, handler func(res http.ResponseWriter, req *http.Request)) error {
 	dispatchSubject := namespace("service", serviceName)
 	sub, err := c.NatsConnection.QueueSubscribe(dispatchSubject, dispatchSubject, func(msg *nats.Msg) {
-		if err := c.handleDispatch(msg, handler); err != nil {
-			panic(err)
-		}
+		go func() {
+			if err := c.handleDispatch(msg, handler); err != nil {
+				panic(err)
+			}
+		}()
 	})
 	if err != nil {
 		return err
