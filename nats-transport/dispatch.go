@@ -270,9 +270,11 @@ func (c *NatsTransport) Dispatch(serviceName string, res http.ResponseWriter, re
 			return err
 		}
 
-		if _, err := res.Write(bodyChunk.Data); err != nil {
-			transportNatsDispatchDebug.Tracef("Failed to write response body chunk: %v", err)
-			return err
+		if len(bodyChunk.Data) > 0 {
+			if _, err := res.Write(bodyChunk.Data); err != nil {
+				transportNatsDispatchDebug.Tracef("Failed to write response body chunk: %v", err)
+				return err
+			}
 		}
 
 		if bodyChunk.IsEOF {
