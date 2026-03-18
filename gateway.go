@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/RobertWHurst/navaros"
@@ -21,6 +22,14 @@ var GatewayAnnounceInterval = time.Duration((8 + rand.Intn(2))) * time.Second
 // ContextKeyRouteDescriptor is the key used to store the matched route
 // descriptor on the navaros context.
 const ContextKeyRouteDescriptor = "zephyr:route-descriptor"
+
+// ContextKeyServiceDescriptor is the key used to store the matched service
+// descriptor on the navaros context.
+const ContextKeyServiceDescriptor = "zephyr:service-descriptor"
+
+// ContextKeyServiceDescriptors is the key used to store all service descriptors
+// on the navaros context.
+const ContextKeyServiceDescriptors = "zephyr:service-descriptors"
 
 type Gateway struct {
 	Name      string
@@ -71,11 +80,8 @@ func (g *Gateway) Start() error {
 
 		announcingToThisGateway := len(serviceDescriptor.GatewayNames) == 0
 		if !announcingToThisGateway {
-			for _, gatewayName := range serviceDescriptor.GatewayNames {
-				if gatewayName == g.Name {
-					announcingToThisGateway = true
-					break
-				}
+			if slices.Contains(serviceDescriptor.GatewayNames, g.Name) {
+				announcingToThisGateway = true
 			}
 		}
 		if !announcingToThisGateway {
@@ -131,21 +137,21 @@ func (g *Gateway) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	serviceName, _, ok := g.gsi.ResolveService(req.Method, req.URL.Path)
+	sd, _, ok := g.gsi.ResolveService(req.Method, req.URL.Path)
 	if !ok {
 		gatewayRouteDebug.Tracef("No service found for %s %s, returning 404", req.Method, req.URL.Path)
 		res.WriteHeader(404)
 		return
 	}
 
-	gatewayRouteDebug.Tracef("Resolved %s %s to service %s", req.Method, req.URL.Path, serviceName)
+	gatewayRouteDebug.Tracef("Resolved %s %s to service %s", req.Method, req.URL.Path, sd.Name)
 
-	if err := g.Transport.Dispatch(serviceName, res, req); err != nil {
-		gatewayRouteDebug.Tracef("Error dispatching to %s: %v", serviceName, err)
-		panic(fmt.Errorf("failed to dispatch request to %s: %w", serviceName, err))
+	if err := g.Transport.Dispatch(sd.Name, res, req); err != nil {
+		gatewayRouteDebug.Tracef("Error dispatching to %s: %v", sd.Name, err)
+		panic(fmt.Errorf("failed to dispatch request to %s: %w", sd.Name, err))
 	}
 
-	gatewayRouteDebug.Tracef("Successfully dispatched %s %s to %s", req.Method, req.URL.Path, serviceName)
+	gatewayRouteDebug.Tracef("Successfully dispatched %s %s to %s", req.Method, req.URL.Path, sd.Name)
 }
 
 func (g *Gateway) CanServeHTTP(req *http.Request) bool {
@@ -176,26 +182,26 @@ func (g *Gateway) Handle(ctx *navaros.Context) {
 		return
 	}
 
-	serviceName, rd, ok := g.gsi.ResolveService(string(method), path)
+	sd, rd, ok := g.gsi.ResolveService(string(method), path)
 	if !ok {
 		gatewayRouteDebug.Tracef("No service found for %s %s, skipping to next handler", method, path)
 		ctx.Next()
 		return
 	}
 
-	gatewayRouteDebug.Tracef("Resolved %s %s to service %s", method, path, serviceName)
+	gatewayRouteDebug.Tracef("Resolved %s %s to service %s", method, path, sd.Name)
 
 	if rd != nil {
 		ctx.Set(ContextKeyRouteDescriptor, rd)
 	}
 
 	// This Panic is ok because it will be caught and handled by Navaros
-	if err := g.Transport.Dispatch(serviceName, ctx.ResponseWriter(), ctx.Request()); err != nil {
-		gatewayRouteDebug.Tracef("Error dispatching to %s: %v", serviceName, err)
+	if err := g.Transport.Dispatch(sd.Name, ctx.ResponseWriter(), ctx.Request()); err != nil {
+		gatewayRouteDebug.Tracef("Error dispatching to %s: %v", sd.Name, err)
 		panic(err)
 	}
 
-	gatewayRouteDebug.Tracef("Successfully dispatched %s %s to %s", method, path, serviceName)
+	gatewayRouteDebug.Tracef("Successfully dispatched %s %s to %s", method, path, sd.Name)
 }
 
 func (g *Gateway) CanHandle(ctx *navaros.Context) bool {
@@ -224,10 +230,13 @@ func (g *Gateway) CanHandle(ctx *navaros.Context) bool {
 func (g *Gateway) DescriptorMiddleware() navaros.HandlerFunc {
 	return func(ctx *navaros.Context) {
 		if g.gsi != nil {
+			ctx.Set(ContextKeyServiceDescriptors, g.gsi.ServiceDescriptors)
+
 			method := string(ctx.Method())
 			path := ctx.Path()
-			if _, rd, ok := g.gsi.ResolveService(method, path); ok && rd != nil {
+			if sd, rd, ok := g.gsi.ResolveService(method, path); ok && rd != nil {
 				ctx.Set(ContextKeyRouteDescriptor, rd)
+				ctx.Set(ContextKeyServiceDescriptor, sd)
 			}
 		}
 		ctx.Next()
@@ -253,4 +262,28 @@ func RouteDescriptorFromContext(ctx *navaros.Context) *RouteDescriptor {
 	}
 	rd, _ := v.(*RouteDescriptor)
 	return rd
+}
+
+// ServiceDescriptorFromContext retrieves the service descriptor that was set on
+// the context by DescriptorMiddleware or Handle. Returns nil if no descriptor
+// was set.
+func ServiceDescriptorFromContext(ctx *navaros.Context) *ServiceDescriptor {
+	v, ok := ctx.Get(ContextKeyServiceDescriptor)
+	if !ok {
+		return nil
+	}
+	sd, _ := v.(*ServiceDescriptor)
+	return sd
+}
+
+// ServiceDescriptorsFromContext retrieves the service descriptors that were set
+// on the context by DescriptorMiddleware or Handle. Returns nil if no descriptors
+// were set.
+func ServiceDescriptorsFromContext(ctx *navaros.Context) []*ServiceDescriptor {
+	v, ok := ctx.Get(ContextKeyServiceDescriptors)
+	if !ok {
+		return nil
+	}
+	sds, _ := v.([]*ServiceDescriptor)
+	return sds
 }
