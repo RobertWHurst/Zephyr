@@ -16,4 +16,5 @@ type Transport interface {
 	Dispatch(serviceName string, res http.ResponseWriter, req *http.Request) error
 	BindDispatch(serviceName string, handler func(res http.ResponseWriter, req *http.Request)) error
 	UnbindDispatch(serviceName string) error
+
 }

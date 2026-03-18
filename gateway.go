@@ -35,6 +35,7 @@ type Gateway struct {
 	Name      string
 	Transport Transport
 	gsi       *GatewayServiceIndexer
+	stopChan  chan struct{}
 }
 
 var _ http.Handler = &Gateway{}
@@ -44,6 +45,7 @@ func NewGateway(name string, transport Transport) *Gateway {
 	return &Gateway{
 		Name:      name,
 		Transport: transport,
+		stopChan:  make(chan struct{}),
 	}
 }
 
@@ -101,6 +103,8 @@ func (g *Gateway) Start() error {
 		return err
 	}
 
+	go g.pruneLoop()
+
 	gatewayDebug.Tracef("Announcing gateway %s", g.Name)
 	return g.Transport.AnnounceGateway(&GatewayDescriptor{
 		Name:               g.Name,
@@ -115,6 +119,8 @@ func (g *Gateway) Stop() {
 		gatewayDebug.Trace("Gateway already stopped")
 		return
 	}
+
+	close(g.stopChan)
 
 	gatewayDebug.Trace("Closing service indexer")
 	g.gsi.Close()
@@ -221,6 +227,20 @@ func (g *Gateway) CanHandle(ctx *navaros.Context) bool {
 		gatewayRouteDebug.Tracef("Cannot handle %s %s, no matching service", method, path)
 	}
 	return ok
+}
+
+func (g *Gateway) pruneLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-g.stopChan:
+			return
+		case <-ticker.C:
+			g.gsi.PruneStaleServices(15*time.Second, 30*time.Second)
+		}
+	}
 }
 
 // DescriptorMiddleware returns a navaros middleware that resolves the

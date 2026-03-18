@@ -1,6 +1,9 @@
 package zephyr
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 type GatewayServiceIndexer struct {
 	mu                 sync.Mutex
@@ -29,12 +32,19 @@ func (r *GatewayServiceIndexer) SetServiceDescriptor(descriptor *ServiceDescript
 		return nil
 	}
 
+	now := time.Now()
+
 	for _, existingDescriptor := range r.ServiceDescriptors {
 		if existingDescriptor.Name == descriptor.Name {
 			existingDescriptor.RouteDescriptors = descriptor.RouteDescriptors
+			existingDescriptor.LastSeenAt = &now
+			existingDescriptor.UnreachableAt = nil
+			existingDescriptor.UnreachableCount = 0
 			return nil
 		}
 	}
+
+	descriptor.LastSeenAt = &now
 	r.ServiceDescriptors = append(r.ServiceDescriptors, descriptor)
 	return nil
 }
@@ -54,6 +64,53 @@ func (r *GatewayServiceIndexer) UnsetService(name string) error {
 		}
 	}
 	return nil
+}
+
+func (r *GatewayServiceIndexer) MarkReachable(name string, now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.closed {
+		return
+	}
+
+	for _, sd := range r.ServiceDescriptors {
+		if sd.Name == name {
+			sd.LastSeenAt = &now
+			sd.UnreachableAt = nil
+			sd.UnreachableCount = 0
+			return
+		}
+	}
+}
+
+func (r *GatewayServiceIndexer) PruneStaleServices(staleThreshold time.Duration, removeThreshold time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.closed {
+		return
+	}
+
+	now := time.Now()
+	remaining := r.ServiceDescriptors[:0]
+
+	for _, sd := range r.ServiceDescriptors {
+		if sd.LastSeenAt != nil && now.Sub(*sd.LastSeenAt) > staleThreshold && sd.UnreachableAt == nil {
+			gatewayIndexerDebug.Tracef("Service %s is stale, marking unreachable", sd.Name)
+			sd.UnreachableAt = &now
+			sd.UnreachableCount++
+		}
+
+		if sd.UnreachableAt != nil && now.Sub(*sd.UnreachableAt) > removeThreshold {
+			gatewayIndexerDebug.Tracef("Removing stale service %s", sd.Name)
+			continue
+		}
+
+		remaining = append(remaining, sd)
+	}
+
+	r.ServiceDescriptors = remaining
 }
 
 func (r *GatewayServiceIndexer) ResolveService(method string, path string) (*ServiceDescriptor, *RouteDescriptor, bool) {

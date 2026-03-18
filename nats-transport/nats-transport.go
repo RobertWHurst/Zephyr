@@ -16,7 +16,7 @@ var _ zephyr.Transport = &NatsTransport{}
 
 func New(natsConnection *nats.Conn) *NatsTransport {
 	return &NatsTransport{
-		NatsConnection: natsConnection,
+		NatsConnection:  natsConnection,
 		unbindDispatch: map[string][]func() error{},
 	}
 }
