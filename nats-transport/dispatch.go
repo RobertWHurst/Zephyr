@@ -3,6 +3,7 @@ package natstransport
 import (
 	"bytes"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -548,9 +549,13 @@ func (c *NatsTransport) handleDispatch(msg *nats.Msg, handler func(res http.Resp
 	transportNatsDispatchDebug.Trace("Processing request with handler")
 	func() {
 		defer func() {
-			if err := recover(); err != nil {
-				transportNatsDispatchDebug.Tracef("Recovered from panic in handler: %v", err)
-				res.WriteError(err.(error))
+			if r := recover(); r != nil {
+				transportNatsDispatchDebug.Tracef("Recovered from panic in handler: %v", r)
+				if err, ok := r.(error); ok {
+					res.WriteError(err)
+				} else {
+					res.WriteError(fmt.Errorf("%v", r))
+				}
 			}
 		}()
 
