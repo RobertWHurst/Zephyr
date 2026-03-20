@@ -38,8 +38,6 @@ func (r *GatewayServiceIndexer) SetServiceDescriptor(descriptor *ServiceDescript
 		if existingDescriptor.Name == descriptor.Name {
 			existingDescriptor.RouteDescriptors = descriptor.RouteDescriptors
 			existingDescriptor.LastSeenAt = &now
-			existingDescriptor.UnreachableAt = nil
-			existingDescriptor.UnreachableCount = 0
 			return nil
 		}
 	}
@@ -66,25 +64,32 @@ func (r *GatewayServiceIndexer) UnsetService(name string) error {
 	return nil
 }
 
-func (r *GatewayServiceIndexer) MarkReachable(name string, now time.Time) {
+// FreshServiceDescriptors returns service descriptors seen within the given
+// threshold. Used by the gateway announce loop to exclude stale services from
+// announcements — stale services won't see themselves in the list and will
+// re-announce if still alive.
+func (r *GatewayServiceIndexer) FreshServiceDescriptors(threshold time.Duration) []*ServiceDescriptor {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.closed {
-		return
+		return nil
 	}
 
+	now := time.Now()
+	var fresh []*ServiceDescriptor
 	for _, sd := range r.ServiceDescriptors {
-		if sd.Name == name {
-			sd.LastSeenAt = &now
-			sd.UnreachableAt = nil
-			sd.UnreachableCount = 0
-			return
+		if sd.LastSeenAt != nil && now.Sub(*sd.LastSeenAt) <= threshold {
+			fresh = append(fresh, sd)
 		}
 	}
+	return fresh
 }
 
-func (r *GatewayServiceIndexer) PruneStaleServices(staleThreshold time.Duration, removeThreshold time.Duration) {
+// PruneStaleServices removes services that haven't announced within the given
+// threshold. Services excluded from gateway announcements are prompted to
+// re-announce; those that don't respond are assumed dead and removed.
+func (r *GatewayServiceIndexer) PruneStaleServices(removeThreshold time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -96,14 +101,8 @@ func (r *GatewayServiceIndexer) PruneStaleServices(staleThreshold time.Duration,
 	remaining := r.ServiceDescriptors[:0]
 
 	for _, sd := range r.ServiceDescriptors {
-		if sd.LastSeenAt != nil && now.Sub(*sd.LastSeenAt) > staleThreshold && sd.UnreachableAt == nil {
-			gatewayIndexerDebug.Tracef("Service %s is stale, marking unreachable", sd.Name)
-			sd.UnreachableAt = &now
-			sd.UnreachableCount++
-		}
-
-		if sd.UnreachableAt != nil && now.Sub(*sd.UnreachableAt) > removeThreshold {
-			gatewayIndexerDebug.Tracef("Removing stale service %s", sd.Name)
+		if sd.LastSeenAt != nil && now.Sub(*sd.LastSeenAt) > removeThreshold {
+			gatewayIndexerDebug.Tracef("Removing stale service %s (last seen %s ago)", sd.Name, now.Sub(*sd.LastSeenAt))
 			continue
 		}
 
@@ -122,9 +121,6 @@ func (r *GatewayServiceIndexer) ResolveService(method string, path string) (*Ser
 	}
 
 	for _, remoteService := range r.ServiceDescriptors {
-		if remoteService.UnreachableAt != nil {
-			continue
-		}
 		for _, httpRoute := range remoteService.RouteDescriptors {
 			if httpRoute.Method != method {
 				continue

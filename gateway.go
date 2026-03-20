@@ -104,6 +104,7 @@ func (g *Gateway) Start() error {
 	}
 
 	go g.pruneLoop()
+	go g.announceLoop()
 
 	gatewayDebug.Tracef("Announcing gateway %s", g.Name)
 	return g.Transport.AnnounceGateway(&GatewayDescriptor{
@@ -229,8 +230,8 @@ func (g *Gateway) CanHandle(ctx *navaros.Context) bool {
 	return ok
 }
 
-func (g *Gateway) pruneLoop() {
-	ticker := time.NewTicker(5 * time.Second)
+func (g *Gateway) announceLoop() {
+	ticker := time.NewTicker(GatewayAnnounceInterval)
 	defer ticker.Stop()
 
 	for {
@@ -238,7 +239,31 @@ func (g *Gateway) pruneLoop() {
 		case <-g.stopChan:
 			return
 		case <-ticker.C:
-			g.gsi.PruneStaleServices(15*time.Second, 30*time.Second)
+			// Only include fresh services in the announcement. Stale services
+			// are excluded so they don't see themselves in the list — this
+			// prompts them to re-announce if still alive.
+			fresh := g.gsi.FreshServiceDescriptors(3 * GatewayAnnounceInterval)
+			gatewayDebug.Tracef("Periodic announce for gateway %s (%d fresh services)", g.Name, len(fresh))
+			if err := g.Transport.AnnounceGateway(&GatewayDescriptor{
+				Name:               g.Name,
+				ServiceDescriptors: fresh,
+			}); err != nil {
+				gatewayDebug.Tracef("Failed to announce gateway: %v", err)
+			}
+		}
+	}
+}
+
+func (g *Gateway) pruneLoop() {
+	ticker := time.NewTicker(GatewayAnnounceInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-g.stopChan:
+			return
+		case <-ticker.C:
+			g.gsi.PruneStaleServices(5 * GatewayAnnounceInterval)
 		}
 	}
 }

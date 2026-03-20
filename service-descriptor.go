@@ -9,6 +9,4 @@ type ServiceDescriptor struct {
 	GatewayNames     []string           `msgpack:"gatewayNames"`
 	RouteDescriptors []*RouteDescriptor `msgpack:"httpRouteDescriptors"`
 	LastSeenAt       *time.Time         `msgpack:"-"`
-	UnreachableAt    *time.Time         `msgpack:"-"`
-	UnreachableCount int                `msgpack:"-"`
 }
