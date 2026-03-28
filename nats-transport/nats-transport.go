@@ -1,6 +1,8 @@
 package natstransport
 
 import (
+	"sync"
+
 	"github.com/RobertWHurst/zephyr"
 	"github.com/nats-io/nats.go"
 )
@@ -10,6 +12,7 @@ type NatsTransport struct {
 	unbindDispatch        map[string][]func() error
 	unbindServiceAnnounce func() error
 	unbindGatewayAnnounce func() error
+	dispatchHandlerWg     sync.WaitGroup
 }
 
 var _ zephyr.Transport = &NatsTransport{}

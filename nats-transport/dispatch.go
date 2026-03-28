@@ -291,7 +291,9 @@ func (c *NatsTransport) Dispatch(serviceName string, res http.ResponseWriter, re
 func (c *NatsTransport) BindDispatch(serviceName string, handler func(res http.ResponseWriter, req *http.Request)) error {
 	dispatchSubject := namespace("service", serviceName)
 	sub, err := c.NatsConnection.QueueSubscribe(dispatchSubject, dispatchSubject, func(msg *nats.Msg) {
+		c.dispatchHandlerWg.Add(1)
 		go func() {
+			defer c.dispatchHandlerWg.Done()
 			if err := c.handleDispatch(msg, handler); err != nil {
 				panic(err)
 			}
@@ -582,6 +584,7 @@ func (c *NatsTransport) UnbindDispatch(serviceName string) error {
 		}
 		delete(c.unbindDispatch, serviceName)
 	}
+	c.dispatchHandlerWg.Wait()
 	return nil
 }
 
