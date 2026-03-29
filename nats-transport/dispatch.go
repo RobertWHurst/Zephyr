@@ -293,6 +293,8 @@ func (c *NatsTransport) BindDispatch(serviceName string, handler func(res http.R
 	sub, err := c.NatsConnection.QueueSubscribe(dispatchSubject, dispatchSubject, func(msg *nats.Msg) {
 		c.dispatchHandlerWg.Add(1)
 		go func() {
+			c.handlerSem <- struct{}{}
+			defer func() { <-c.handlerSem }()
 			defer c.dispatchHandlerWg.Done()
 			if err := c.handleDispatch(msg, handler); err != nil {
 				panic(err)
