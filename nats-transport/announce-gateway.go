@@ -1,6 +1,9 @@
 package natstransport
 
 import (
+	"context"
+	"errors"
+
 	"github.com/RobertWHurst/zephyr"
 	"github.com/nats-io/nats.go"
 	"github.com/telemetrytv/trace"
@@ -34,8 +37,8 @@ func (c *NatsTransport) AnnounceGateway(gatewayDescriptor *zephyr.GatewayDescrip
 	return nil
 }
 
-func (c *NatsTransport) BindGatewayAnnounce(handler func(gatewayDescriptor *zephyr.GatewayDescriptor)) error {
-	transportNatsAnnounceDebug.Trace("Binding gateway announcement handler")
+func (c *NatsTransport) HandleGatewayAnnouncements(ctx context.Context, ready chan<- struct{}, handler func(gatewayDescriptor *zephyr.GatewayDescriptor)) error {
+	transportNatsAnnounceDebug.Trace("Handling gateway announcements")
 
 	subHandler := func(msg *nats.Msg) {
 		transportNatsAnnounceDebug.Trace("Received gateway announcement")
@@ -62,23 +65,17 @@ func (c *NatsTransport) BindGatewayAnnounce(handler func(gatewayDescriptor *zeph
 		transportNatsAnnounceDebug.Tracef("Failed to subscribe to gateway announcements: %v", err)
 		return err
 	}
+	defer gatewayAnnounceSub.Unsubscribe()
+
+	if err := flushWithContext(ctx, c.NatsConnection); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
+	}
 
 	transportNatsAnnounceDebug.Trace("Successfully subscribed to gateway announcements")
-	c.unbindGatewayAnnounce = func() error {
-		transportNatsAnnounceDebug.Trace("Unsubscribing from gateway announcements")
-		return gatewayAnnounceSub.Unsubscribe()
-	}
-
+	signalReady(ready)
+	<-ctx.Done()
 	return nil
-}
-
-func (c *NatsTransport) UnbindGatewayAnnounce() error {
-	transportNatsAnnounceDebug.Trace("Unbinding gateway announcement handler")
-	err := c.unbindGatewayAnnounce()
-	if err != nil {
-		transportNatsAnnounceDebug.Tracef("Failed to unbind gateway announcement handler: %v", err)
-	} else {
-		transportNatsAnnounceDebug.Trace("Successfully unbound gateway announcement handler")
-	}
-	return err
 }

@@ -18,13 +18,13 @@ func TestIterativeMemoryGrowth_Local(t *testing.T) {
 	transport := localtransport.New()
 
 	gateway := zephyr.NewGateway("test-gateway", transport)
-	if err := gateway.Start(); err != nil {
+	if err := startGateway(t, gateway); err != nil {
 		t.Fatalf("Failed to start gateway: %v", err)
 	}
-	defer gateway.Stop()
+	defer gateway.Close()
 
-	service := setupTestService(transport, "growth-test-service")
-	defer service.Stop()
+	service := setupTestService(t, transport, "growth-test-service")
+	defer service.Close()
 
 	const (
 		warmupIterations = 500
@@ -82,13 +82,13 @@ func TestIterativeMemoryGrowth_NATS(t *testing.T) {
 	transport := natstransport.New(nc)
 
 	gateway := zephyr.NewGateway("test-gateway", transport)
-	if err := gateway.Start(); err != nil {
+	if err := startGateway(t, gateway); err != nil {
 		t.Fatalf("Failed to start gateway: %v", err)
 	}
-	defer gateway.Stop()
+	defer gateway.Close()
 
-	service := setupTestService(transport, "growth-test-service-nats")
-	defer service.Stop()
+	service := setupTestService(t, transport, "growth-test-service-nats")
+	defer service.Close()
 
 	// Allow service discovery
 	time.Sleep(100 * time.Millisecond)
@@ -154,7 +154,7 @@ func TestGoroutineLeak_Local(t *testing.T) {
 			transport,
 			simpleHandler,
 		)
-		service.Start()
+		startService(t, service)
 
 		// Execute requests
 		for i := 0; i < 50; i++ {
@@ -163,7 +163,7 @@ func TestGoroutineLeak_Local(t *testing.T) {
 			transport.Dispatch(fmt.Sprintf("goroutine-test-local-%d", cycle), rec, req)
 		}
 
-		service.Stop()
+		service.Close()
 	}
 
 	// Allow time for goroutines to exit
@@ -203,7 +203,7 @@ func TestGoroutineLeak_NATS(t *testing.T) {
 			transport,
 			simpleHandler,
 		)
-		service.Start()
+		startService(t, service)
 
 		// Execute requests
 		for i := 0; i < 30; i++ {
@@ -212,7 +212,7 @@ func TestGoroutineLeak_NATS(t *testing.T) {
 			transport.Dispatch(fmt.Sprintf("goroutine-test-nats-%d", cycle), rec, req)
 		}
 
-		service.Stop()
+		service.Close()
 	}
 
 	// Allow time for goroutines to exit
@@ -238,8 +238,8 @@ func TestServiceRegistrationCycle_Local(t *testing.T) {
 	transport := localtransport.New()
 
 	gateway := zephyr.NewGateway("test-gateway", transport)
-	gateway.Start()
-	defer gateway.Stop()
+	startGateway(t, gateway)
+	defer gateway.Close()
 
 	profiler := NewMemoryProfiler(t, "service_registration_local")
 
@@ -248,8 +248,8 @@ func TestServiceRegistrationCycle_Local(t *testing.T) {
 	// Warmup
 	for i := 0; i < 10; i++ {
 		service := zephyr.NewService(fmt.Sprintf("warmup-service-%d", i), transport, simpleHandler)
-		service.Start()
-		service.Stop()
+		startService(t, service)
+		service.Close()
 	}
 
 	runtime.GC()
@@ -257,7 +257,7 @@ func TestServiceRegistrationCycle_Local(t *testing.T) {
 
 	for i := 0; i < cycles; i++ {
 		service := zephyr.NewService(fmt.Sprintf("cycle-service-%d", i), transport, simpleHandler)
-		service.Start()
+		startService(t, service)
 
 		// Do some work
 		for j := 0; j < 20; j++ {
@@ -266,7 +266,7 @@ func TestServiceRegistrationCycle_Local(t *testing.T) {
 			transport.Dispatch(fmt.Sprintf("cycle-service-%d", i), rec, req)
 		}
 
-		service.Stop()
+		service.Close()
 
 		if i > 0 && i%10 == 0 {
 			runtime.GC()
@@ -288,8 +288,8 @@ func TestServiceRegistrationCycle_NATS(t *testing.T) {
 	transport := natstransport.New(nc)
 
 	gateway := zephyr.NewGateway("test-gateway", transport)
-	gateway.Start()
-	defer gateway.Stop()
+	startGateway(t, gateway)
+	defer gateway.Close()
 
 	profiler := NewMemoryProfiler(t, "service_registration_nats")
 
@@ -298,9 +298,9 @@ func TestServiceRegistrationCycle_NATS(t *testing.T) {
 	// Warmup
 	for i := 0; i < 5; i++ {
 		service := zephyr.NewService(fmt.Sprintf("warmup-service-nats-%d", i), transport, simpleHandler)
-		service.Start()
+		startService(t, service)
 		time.Sleep(50 * time.Millisecond)
-		service.Stop()
+		service.Close()
 	}
 
 	runtime.GC()
@@ -308,7 +308,7 @@ func TestServiceRegistrationCycle_NATS(t *testing.T) {
 
 	for i := 0; i < cycles; i++ {
 		service := zephyr.NewService(fmt.Sprintf("cycle-service-nats-%d", i), transport, simpleHandler)
-		service.Start()
+		startService(t, service)
 		time.Sleep(20 * time.Millisecond)
 
 		// Do some work
@@ -318,7 +318,7 @@ func TestServiceRegistrationCycle_NATS(t *testing.T) {
 			transport.Dispatch(fmt.Sprintf("cycle-service-nats-%d", i), rec, req)
 		}
 
-		service.Stop()
+		service.Close()
 
 		if i > 0 && i%10 == 0 {
 			runtime.GC()
@@ -337,11 +337,11 @@ func TestMemoryRelease_LargePayload_Local(t *testing.T) {
 	transport := localtransport.New()
 
 	gateway := zephyr.NewGateway("test-gateway", transport)
-	gateway.Start()
-	defer gateway.Stop()
+	startGateway(t, gateway)
+	defer gateway.Close()
 
-	service := setupTestService(transport, "large-payload-service")
-	defer service.Stop()
+	service := setupTestService(t, transport, "large-payload-service")
+	defer service.Close()
 
 	profiler := NewMemoryProfiler(t, "large_payload_local")
 
@@ -394,11 +394,11 @@ func TestMemoryRelease_LargePayload_NATS(t *testing.T) {
 	transport := natstransport.New(nc)
 
 	gateway := zephyr.NewGateway("test-gateway", transport)
-	gateway.Start()
-	defer gateway.Stop()
+	startGateway(t, gateway)
+	defer gateway.Close()
 
-	service := setupTestService(transport, "large-payload-service-nats")
-	defer service.Stop()
+	service := setupTestService(t, transport, "large-payload-service-nats")
+	defer service.Close()
 
 	time.Sleep(100 * time.Millisecond)
 

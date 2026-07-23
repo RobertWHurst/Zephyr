@@ -66,7 +66,7 @@ var echoHandler = func(ctx *navaros.Context) {
 }
 
 // setupTestService creates and starts a test service with routes
-func setupTestService(transport zephyr.Transport, name string) *zephyr.Service {
+func setupTestService(tb testing.TB, transport zephyr.Transport, name string) *zephyr.Service {
 	router := navaros.NewRouter()
 	router.Get("/test", simpleHandler)
 	router.Post("/test", echoHandler)
@@ -77,7 +77,7 @@ func setupTestService(transport zephyr.Transport, name string) *zephyr.Service {
 		mustRouteDescriptor("POST", "/test"),
 	}
 
-	if err := service.Start(); err != nil {
+	if err := startService(tb, service); err != nil {
 		panic(fmt.Sprintf("Failed to start test service: %v", err))
 	}
 

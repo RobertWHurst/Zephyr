@@ -2,7 +2,9 @@ package natstransport
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -16,7 +18,7 @@ import (
 )
 
 var (
-	transportNatsDebug       = trace.Bind("zephyr:transport:nats")
+	transportNatsDebug         = trace.Bind("zephyr:transport:nats")
 	transportNatsDispatchDebug = trace.Bind("zephyr:transport:nats:dispatch")
 )
 
@@ -82,12 +84,12 @@ type BodyChunk struct {
 
 func (c *NatsTransport) Dispatch(serviceName string, res http.ResponseWriter, req *http.Request) error {
 	transportNatsDispatchDebug.Tracef("Dispatching request to service %s: %s %s", serviceName, req.Method, req.URL.Path)
-	
+
 	requestSubject := namespace("service", serviceName)
 	responseSubject := nats.NewInbox()
 	responseBodySubject := nats.NewInbox()
-	
-	transportNatsDispatchDebug.Tracef("Using subjects - request: %s, response: %s, responseBody: %s", 
+
+	transportNatsDispatchDebug.Tracef("Using subjects - request: %s, response: %s, responseBody: %s",
 		requestSubject, responseSubject, responseBodySubject)
 
 	request := &Request{
@@ -162,7 +164,7 @@ func (c *NatsTransport) Dispatch(serviceName string, res http.ResponseWriter, re
 		transportNatsDispatchDebug.Tracef("Request to %s failed: %v", requestSubject, err)
 		return err
 	}
-	
+
 	transportNatsDispatchDebug.Trace("Received acknowledgment from service")
 	requestAck := &RequestAck{}
 	if err := msgpack.Unmarshal(requestAckMsg.Data, requestAck); err != nil {
@@ -240,7 +242,7 @@ func (c *NatsTransport) Dispatch(serviceName string, res http.ResponseWriter, re
 		transportNatsDispatchDebug.Tracef("Error waiting for response headers: %v", err)
 		return err
 	}
-	
+
 	transportNatsDispatchDebug.Trace("Unmarshaling response headers")
 	response := &Response{}
 	if err := msgpack.Unmarshal(responseMsg.Data, response); err != nil {
@@ -288,7 +290,7 @@ func (c *NatsTransport) Dispatch(serviceName string, res http.ResponseWriter, re
 	return nil
 }
 
-func (c *NatsTransport) BindDispatch(serviceName string, handler func(res http.ResponseWriter, req *http.Request)) error {
+func (c *NatsTransport) HandleDispatch(ctx context.Context, ready chan<- struct{}, serviceName string, handler func(res http.ResponseWriter, req *http.Request)) error {
 	dispatchSubject := namespace("service", serviceName)
 	sub, err := c.NatsConnection.QueueSubscribe(dispatchSubject, dispatchSubject, func(msg *nats.Msg) {
 		c.dispatchHandlerWg.Add(1)
@@ -304,16 +306,22 @@ func (c *NatsTransport) BindDispatch(serviceName string, handler func(res http.R
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err := sub.Unsubscribe(); err != nil {
+			transportNatsDispatchDebug.Tracef("Failed to unsubscribe from dispatch subject: %v", err)
+		}
+		c.dispatchHandlerWg.Wait()
+	}()
 
-	unbinders, ok := c.unbindDispatch[serviceName]
-	if !ok {
-		unbinders = []func() error{}
+	if err := flushWithContext(ctx, c.NatsConnection); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
 	}
-	unbinders = append(unbinders, func() error {
-		return sub.Unsubscribe()
-	})
-	c.unbindDispatch[serviceName] = unbinders
 
+	signalReady(ready)
+	<-ctx.Done()
 	return nil
 }
 
@@ -475,7 +483,7 @@ func (c *NatsTransport) handleDispatch(msg *nats.Msg, handler func(res http.Resp
 	}
 
 	transportNatsDispatchDebug.Tracef("Received request: %s %s", request.Method, request.URL)
-	
+
 	reqUrl, err := url.Parse(request.URL)
 	if err != nil {
 		transportNatsDispatchDebug.Tracef("Failed to parse URL: %v", err)
@@ -506,7 +514,7 @@ func (c *NatsTransport) handleDispatch(msg *nats.Msg, handler func(res http.Resp
 		header:              map[string][]string{},
 		buffer:              bytes.Buffer{},
 	}
-	
+
 	transportNatsDispatchDebug.Trace("Set up response writer and request reader")
 
 	req := &http.Request{
@@ -565,7 +573,7 @@ func (c *NatsTransport) handleDispatch(msg *nats.Msg, handler func(res http.Resp
 
 		handler(res, req)
 	}()
-	
+
 	transportNatsDispatchDebug.Trace("Handler completed, sending response")
 	if err := res.End(); err != nil {
 		transportNatsDispatchDebug.Tracef("Failed to end response: %v", err)
@@ -573,20 +581,6 @@ func (c *NatsTransport) handleDispatch(msg *nats.Msg, handler func(res http.Resp
 	}
 
 	transportNatsDispatchDebug.Trace("Request handling completed successfully")
-	return nil
-}
-
-func (c *NatsTransport) UnbindDispatch(serviceName string) error {
-	unbinders, ok := c.unbindDispatch[serviceName]
-	if ok {
-		for _, unbind := range unbinders {
-			if err := unbind(); err != nil {
-				return err
-			}
-		}
-		delete(c.unbindDispatch, serviceName)
-	}
-	c.dispatchHandlerWg.Wait()
 	return nil
 }
 

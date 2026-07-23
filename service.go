@@ -1,8 +1,10 @@
 package zephyr
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/RobertWHurst/navaros"
 	"github.com/telemetrytv/trace"
@@ -51,7 +53,9 @@ type Service struct {
 	// either a Navaros router or a standard http.Handler or http.HandlerFunc.
 	Handler any
 
-	stopChan chan struct{}
+	lifecycleMu   sync.Mutex
+	closeCancel   context.CancelFunc
+	lifecycleDone chan struct{}
 }
 
 // NewService creates a new service with the given name, connection, and handler.
@@ -63,85 +67,121 @@ func NewService(name string, transport Transport, handler any) *Service {
 		Name:      name,
 		Transport: transport,
 		Handler:   handler,
-		stopChan:  make(chan struct{}),
 	}
 }
 
-// Start starts the service. This will bind the service to the connection and
-// announce the service to the gateway. If the service is already bound to the
-// connection, this will return an error. Start must be called before the
-// service will receive requests.
-func (s *Service) Start() error {
-	serviceDebug.Tracef("Starting service %s", s.Name)
-
+// Listen starts the service and blocks until the context is canceled, Close is
+// called, or a required transport stream fails.
+func (s *Service) Listen(ctx context.Context) error {
+	serviceDebug.Tracef("Listening as service %s", s.Name)
 	if s.Transport == nil {
 		serviceDebug.Trace("Transport not provided")
 		return fmt.Errorf(
-			"cannot start local service. The associated gateway already handles " +
+			"cannot listen as local service. The associated gateway already handles " +
 				"incoming requests",
 		)
 	}
 
-	serviceDebug.Trace("Binding gateway announcement handler")
-	err := s.Transport.BindGatewayAnnounce(func(gatewayDescriptor *GatewayDescriptor) {
-		s.handleGatewayAnnounce(gatewayDescriptor)
-	})
-	if err != nil {
-		serviceDebug.Tracef("Failed to bind gateway announcement handler: %v", err)
+	listenCtx, cancel := context.WithCancel(ctx)
+	if err := s.setCloseCancel(cancel); err != nil {
+		cancel()
 		return err
 	}
+	defer close(s.lifecycleDone)
+	defer s.clearCloseCancel()
+	defer cancel()
 
-	serviceDebug.Trace("Binding dispatch handler")
-	err = s.Transport.BindDispatch(s.Name, func(res http.ResponseWriter, req *http.Request) {
-		serviceHandleDebug.Tracef("Handling request %s %s", req.Method, req.URL.Path)
+	ready := make(chan struct{}, 2)
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	goRun := func(name string, fn func() error) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := fn(); err != nil {
+				select {
+				case errCh <- fmt.Errorf("%s: %w", name, err):
+				case <-listenCtx.Done():
+				}
+			}
+		}()
+	}
 
-		ctx := navaros.NewContext(res, req, s.Handler)
-		ctx.Next()
-		navaros.CtxFinalize(ctx)
-		navaros.CtxFree(ctx)
-
-		serviceHandleDebug.Tracef("Completed handling request %s %s", req.Method, req.URL.Path)
+	serviceDebug.Trace("Handling gateway announcements")
+	goRun("gateway announcements", func() error {
+		return s.Transport.HandleGatewayAnnouncements(listenCtx, ready, func(gatewayDescriptor *GatewayDescriptor) {
+			s.handleGatewayAnnounce(listenCtx, gatewayDescriptor)
+		})
 	})
-	if err != nil {
-		serviceDebug.Tracef("Failed to bind dispatch handler: %v", err)
-		return err
+
+	serviceDebug.Trace("Handling dispatch")
+	goRun("dispatch", func() error {
+		return s.Transport.HandleDispatch(listenCtx, ready, s.Name, func(res http.ResponseWriter, req *http.Request) {
+			serviceHandleDebug.Tracef("Handling request %s %s", req.Method, req.URL.Path)
+
+			ctx := navaros.NewContext(res, req, s.Handler)
+			ctx.Next()
+			navaros.CtxFinalize(ctx)
+			navaros.CtxFree(ctx)
+
+			serviceHandleDebug.Tracef("Completed handling request %s %s", req.Method, req.URL.Path)
+		})
+	})
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-ready:
+		case err := <-errCh:
+			cancel()
+			wg.Wait()
+			return err
+		case <-listenCtx.Done():
+			cancel()
+			wg.Wait()
+			return nil
+		}
 	}
 
 	serviceDebug.Trace("Announcing service to gateways")
 	if err := s.doAnnounce(); err != nil {
+		cancel()
+		wg.Wait()
 		serviceDebug.Tracef("Failed to announce service: %v", err)
 		return err
 	}
 
-	serviceDebug.Tracef("Service %s started successfully", s.Name)
+	select {
+	case err := <-errCh:
+		cancel()
+		wg.Wait()
+		return err
+	case <-listenCtx.Done():
+		cancel()
+		wg.Wait()
+		return nil
+	}
+}
+
+// Close interrupts a running Listen call. It is safe to call multiple times.
+func (s *Service) Close() error {
+	s.lifecycleMu.Lock()
+	cancel := s.closeCancel
+	done := s.lifecycleDone
+	s.lifecycleMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
 	return nil
 }
 
-// Stop stops the service. This will unbind the service from the connection.
-// This provides a way to dispose of the service if need be.
-func (s *Service) Stop() {
-	serviceDebug.Tracef("Stopping service %s", s.Name)
-
-	serviceDebug.Trace("Unbinding gateway announcement handler")
-	if err := s.Transport.UnbindGatewayAnnounce(); err != nil {
-		serviceDebug.Tracef("Failed to unbind gateway announcement handler: %v", err)
-		panic(err)
-	}
-
-	serviceDebug.Trace("Unbinding dispatch handler")
-	if err := s.Transport.UnbindDispatch(s.Name); err != nil {
-		serviceDebug.Tracef("Failed to unbind dispatch handler: %v", err)
-		panic(err)
-	}
-
-	serviceDebug.Trace("Closing stop channel")
-	close(s.stopChan)
-
-	serviceDebug.Tracef("Service %s stopped successfully", s.Name)
-}
-
-func (s *Service) handleGatewayAnnounce(gatewayDescriptor *GatewayDescriptor) {
+func (s *Service) handleGatewayAnnounce(ctx context.Context, gatewayDescriptor *GatewayDescriptor) {
 	serviceAnnounceDebug.Tracef("Received gateway announcement from %s", gatewayDescriptor.Name)
+	if ctx.Err() != nil {
+		return
+	}
 
 	isWantedGateway := len(s.GatewayNames) == 0
 	if !isWantedGateway {
@@ -174,22 +214,6 @@ func (s *Service) handleGatewayAnnounce(gatewayDescriptor *GatewayDescriptor) {
 			panic(err)
 		}
 	}
-}
-
-// Run starts the service and blocks until the service is stopped.
-func (s *Service) Run() error {
-	serviceDebug.Tracef("Running service %s", s.Name)
-
-	if err := s.Start(); err != nil {
-		serviceDebug.Tracef("Failed to start service: %v", err)
-		return err
-	}
-
-	serviceDebug.Trace("Waiting for service to be stopped")
-	<-s.stopChan
-
-	serviceDebug.Trace("Service run completed")
-	return nil
 }
 
 func (s *Service) doAnnounce() error {
@@ -225,4 +249,22 @@ func (s *Service) doAnnounce() error {
 		GatewayNames:     s.GatewayNames,
 		RouteDescriptors: routeDescriptors,
 	})
+}
+
+func (s *Service) setCloseCancel(cancel context.CancelFunc) error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closeCancel != nil {
+		return fmt.Errorf("service already listening")
+	}
+	s.closeCancel = cancel
+	s.lifecycleDone = make(chan struct{})
+	return nil
+}
+
+func (s *Service) clearCloseCancel() {
+	s.lifecycleMu.Lock()
+	s.closeCancel = nil
+	s.lifecycleDone = nil
+	s.lifecycleMu.Unlock()
 }

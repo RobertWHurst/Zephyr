@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/RobertWHurst/navaros"
@@ -28,10 +29,7 @@ func main() {
 
 	fmt.Println("Creating service")
 	service := zephyr.NewService("example-service-b", transport, router)
-	if err := service.Start(); err != nil {
+	if err := service.Listen(context.Background()); err != nil {
 		panic(err)
 	}
-
-	channel := make(chan struct{})
-	<-channel
 }

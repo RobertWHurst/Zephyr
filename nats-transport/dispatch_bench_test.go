@@ -75,7 +75,7 @@ func mustRouteDescriptor(method, pattern string) *zephyr.RouteDescriptor {
 }
 
 // setupBenchService creates and starts a test service
-func setupBenchService(transport *natstransport.NatsTransport, name string) *zephyr.Service {
+func setupBenchService(tb testing.TB, transport *natstransport.NatsTransport, name string) *zephyr.Service {
 	router := navaros.NewRouter()
 	router.Get("/test", simpleHandler)
 	router.Post("/test", echoHandler)
@@ -86,7 +86,7 @@ func setupBenchService(transport *natstransport.NatsTransport, name string) *zep
 		mustRouteDescriptor("POST", "/test"),
 	}
 
-	if err := service.Start(); err != nil {
+	if err := startService(tb, service); err != nil {
 		panic(fmt.Sprintf("Failed to start test service: %v", err))
 	}
 
@@ -101,11 +101,11 @@ func BenchmarkNatsDispatch_HighVolume(b *testing.B) {
 	transport := natstransport.New(nc)
 
 	gateway := zephyr.NewGateway("bench-gateway", transport)
-	gateway.Start()
-	defer gateway.Stop()
+	startGateway(b, gateway)
+	defer gateway.Close()
 
-	service := setupBenchService(transport, "high-volume-service")
-	defer service.Stop()
+	service := setupBenchService(b, transport, "high-volume-service")
+	defer service.Close()
 
 	// Allow service discovery
 	time.Sleep(100 * time.Millisecond)
@@ -128,11 +128,11 @@ func BenchmarkNatsDispatch_Concurrent(b *testing.B) {
 	transport := natstransport.New(nc)
 
 	gateway := zephyr.NewGateway("bench-gateway", transport)
-	gateway.Start()
-	defer gateway.Stop()
+	startGateway(b, gateway)
+	defer gateway.Close()
 
-	service := setupBenchService(transport, "concurrent-service")
-	defer service.Stop()
+	service := setupBenchService(b, transport, "concurrent-service")
+	defer service.Close()
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -168,11 +168,11 @@ func BenchmarkNatsDispatch_LargePayload(b *testing.B) {
 			transport := natstransport.New(nc)
 
 			gateway := zephyr.NewGateway("bench-gateway", transport)
-			gateway.Start()
-			defer gateway.Stop()
+			startGateway(b, gateway)
+			defer gateway.Close()
 
-			service := setupBenchService(transport, fmt.Sprintf("payload-service-%s", size.name))
-			defer service.Stop()
+			service := setupBenchService(b, transport, fmt.Sprintf("payload-service-%s", size.name))
+			defer service.Close()
 
 			time.Sleep(100 * time.Millisecond)
 
@@ -199,8 +199,8 @@ func TestNatsSubscriptionLeak(t *testing.T) {
 	transport := natstransport.New(nc)
 
 	gateway := zephyr.NewGateway("sub-leak-gateway", transport)
-	gateway.Start()
-	defer gateway.Stop()
+	startGateway(t, gateway)
+	defer gateway.Close()
 
 	// Record initial subscription count
 	initialSubs := nc.NumSubscriptions()
@@ -212,7 +212,7 @@ func TestNatsSubscriptionLeak(t *testing.T) {
 		serviceName := fmt.Sprintf("sub-test-service-%d", i)
 
 		service := zephyr.NewService(serviceName, transport, simpleHandler)
-		service.Start()
+		startService(t, service)
 
 		time.Sleep(20 * time.Millisecond)
 
@@ -223,7 +223,7 @@ func TestNatsSubscriptionLeak(t *testing.T) {
 			transport.Dispatch(serviceName, rec, req)
 		}
 
-		service.Stop()
+		service.Close()
 	}
 
 	// Give time for cleanup
@@ -252,11 +252,11 @@ func TestNatsDispatchMemoryProfile(t *testing.T) {
 	transport := natstransport.New(nc)
 
 	gateway := zephyr.NewGateway("profile-gateway", transport)
-	gateway.Start()
-	defer gateway.Stop()
+	startGateway(t, gateway)
+	defer gateway.Close()
 
-	service := setupBenchService(transport, "profile-service")
-	defer service.Stop()
+	service := setupBenchService(t, transport, "profile-service")
+	defer service.Close()
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -313,8 +313,8 @@ func BenchmarkNatsDispatch_ServiceStartStop(b *testing.B) {
 	transport := natstransport.New(nc)
 
 	gateway := zephyr.NewGateway("bench-gateway", transport)
-	gateway.Start()
-	defer gateway.Stop()
+	startGateway(b, gateway)
+	defer gateway.Close()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -325,7 +325,7 @@ func BenchmarkNatsDispatch_ServiceStartStop(b *testing.B) {
 			transport,
 			simpleHandler,
 		)
-		service.Start()
-		service.Stop()
+		startService(b, service)
+		service.Close()
 	}
 }

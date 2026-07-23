@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -24,9 +25,11 @@ func main() {
 	}
 
 	fmt.Println("Starting gateway")
-	if err := gateway.Start(); err != nil {
-		panic(err)
-	}
+	go func() {
+		if err := gateway.Connect(context.Background()); err != nil {
+			panic(err)
+		}
+	}()
 
 	fmt.Println("Starting http server on :8080")
 	if err = httpServer.ListenAndServe(); err != nil {

@@ -26,7 +26,7 @@ func TestService(t *testing.T) {
 		}
 		s := zephyr.NewService("testService", transport, handler)
 
-		err := s.Start()
+		err := startService(t, s)
 		assert.NoError(t, err)
 
 		sentResponseWriter := httptest.NewRecorder()
@@ -56,12 +56,11 @@ func TestService_Start(t *testing.T) {
 		s := zephyr.NewService("testService", transport, nil)
 
 		var serviceDescriptor *zephyr.ServiceDescriptor
-		err := transport.BindServiceAnnounce(func(d *zephyr.ServiceDescriptor) {
+		watchServiceAnnouncements(t, transport, func(d *zephyr.ServiceDescriptor) {
 			serviceDescriptor = d
 		})
-		assert.NoError(t, err)
 
-		err = s.Start()
+		err := startService(t, s)
 		assert.NoError(t, err)
 		assert.Equal(t, "testService", serviceDescriptor.Name)
 	})
@@ -70,14 +69,13 @@ func TestService_Start(t *testing.T) {
 		transport := localtransport.New()
 		s := zephyr.NewService("testService", transport, nil)
 
-		err := s.Start()
+		err := startService(t, s)
 		assert.NoError(t, err)
 
 		var serviceDescriptor *zephyr.ServiceDescriptor
-		err = transport.BindServiceAnnounce(func(d *zephyr.ServiceDescriptor) {
+		watchServiceAnnouncements(t, transport, func(d *zephyr.ServiceDescriptor) {
 			serviceDescriptor = d
 		})
-		assert.NoError(t, err)
 
 		gatewayDescriptor := &zephyr.GatewayDescriptor{
 			Name: "testGateway",
@@ -92,14 +90,13 @@ func TestService_Start(t *testing.T) {
 		transport := localtransport.New()
 		s := zephyr.NewService("testService", transport, nil)
 
-		err := s.Start()
+		err := startService(t, s)
 		assert.NoError(t, err)
 
 		var serviceDescriptor *zephyr.ServiceDescriptor
-		err = transport.BindServiceAnnounce(func(d *zephyr.ServiceDescriptor) {
+		watchServiceAnnouncements(t, transport, func(d *zephyr.ServiceDescriptor) {
 			serviceDescriptor = d
 		})
-		assert.NoError(t, err)
 
 		gatewayDescriptor := &zephyr.GatewayDescriptor{
 			Name: "testGateway",

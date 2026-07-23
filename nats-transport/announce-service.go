@@ -1,6 +1,9 @@
 package natstransport
 
 import (
+	"context"
+	"errors"
+
 	"github.com/RobertWHurst/zephyr"
 	"github.com/nats-io/nats.go"
 	"github.com/vmihailenco/msgpack/v5"
@@ -29,8 +32,8 @@ func (c *NatsTransport) AnnounceService(serviceDescriptor *zephyr.ServiceDescrip
 	return nil
 }
 
-func (c *NatsTransport) BindServiceAnnounce(handler func(serviceDescriptor *zephyr.ServiceDescriptor)) error {
-	transportNatsAnnounceDebug.Trace("Binding service announcement handler")
+func (c *NatsTransport) HandleServiceAnnouncements(ctx context.Context, ready chan<- struct{}, handler func(serviceDescriptor *zephyr.ServiceDescriptor)) error {
+	transportNatsAnnounceDebug.Trace("Handling service announcements")
 
 	subHandler := func(msg *nats.Msg) {
 		transportNatsAnnounceDebug.Trace("Received service announcement")
@@ -57,23 +60,17 @@ func (c *NatsTransport) BindServiceAnnounce(handler func(serviceDescriptor *zeph
 		transportNatsAnnounceDebug.Tracef("Failed to subscribe to service announcements: %v", err)
 		return err
 	}
+	defer serviceAnnounceSub.Unsubscribe()
+
+	if err := flushWithContext(ctx, c.NatsConnection); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
+	}
 
 	transportNatsAnnounceDebug.Trace("Successfully subscribed to service announcements")
-	c.unbindServiceAnnounce = func() error {
-		transportNatsAnnounceDebug.Trace("Unsubscribing from service announcements")
-		return serviceAnnounceSub.Unsubscribe()
-	}
-
+	signalReady(ready)
+	<-ctx.Done()
 	return nil
-}
-
-func (c *NatsTransport) UnbindServiceAnnounce() error {
-	transportNatsAnnounceDebug.Trace("Unbinding service announcement handler")
-	err := c.unbindServiceAnnounce()
-	if err != nil {
-		transportNatsAnnounceDebug.Tracef("Failed to unbind service announcement handler: %v", err)
-	} else {
-		transportNatsAnnounceDebug.Trace("Successfully unbound service announcement handler")
-	}
-	return err
 }

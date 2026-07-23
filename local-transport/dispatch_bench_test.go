@@ -45,7 +45,7 @@ func mustRouteDescriptor(method, pattern string) *zephyr.RouteDescriptor {
 }
 
 // setupBenchService creates and starts a test service
-func setupBenchService(transport *localtransport.LocalTransport, name string) *zephyr.Service {
+func setupBenchService(tb testing.TB, transport *localtransport.LocalTransport, name string) *zephyr.Service {
 	router := navaros.NewRouter()
 	router.Get("/test", simpleHandler)
 	router.Post("/test", echoHandler)
@@ -56,7 +56,7 @@ func setupBenchService(transport *localtransport.LocalTransport, name string) *z
 		mustRouteDescriptor("POST", "/test"),
 	}
 
-	if err := service.Start(); err != nil {
+	if err := startService(tb, service); err != nil {
 		panic(fmt.Sprintf("Failed to start test service: %v", err))
 	}
 
@@ -68,11 +68,11 @@ func BenchmarkLocalDispatch_HighVolume(b *testing.B) {
 	transport := localtransport.New()
 
 	gateway := zephyr.NewGateway("bench-gateway", transport)
-	gateway.Start()
-	defer gateway.Stop()
+	startGateway(b, gateway)
+	defer gateway.Close()
 
-	service := setupBenchService(transport, "high-volume-service")
-	defer service.Stop()
+	service := setupBenchService(b, transport, "high-volume-service")
+	defer service.Close()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -89,11 +89,11 @@ func BenchmarkLocalDispatch_Concurrent(b *testing.B) {
 	transport := localtransport.New()
 
 	gateway := zephyr.NewGateway("bench-gateway", transport)
-	gateway.Start()
-	defer gateway.Stop()
+	startGateway(b, gateway)
+	defer gateway.Close()
 
-	service := setupBenchService(transport, "concurrent-service")
-	defer service.Stop()
+	service := setupBenchService(b, transport, "concurrent-service")
+	defer service.Close()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -125,11 +125,11 @@ func BenchmarkLocalDispatch_LargePayload(b *testing.B) {
 			transport := localtransport.New()
 
 			gateway := zephyr.NewGateway("bench-gateway", transport)
-			gateway.Start()
-			defer gateway.Stop()
+			startGateway(b, gateway)
+			defer gateway.Close()
 
-			service := setupBenchService(transport, fmt.Sprintf("payload-service-%s", size.name))
-			defer service.Stop()
+			service := setupBenchService(b, transport, fmt.Sprintf("payload-service-%s", size.name))
+			defer service.Close()
 
 			payload := bytes.Repeat([]byte("x"), size.size)
 
@@ -151,8 +151,8 @@ func BenchmarkLocalDispatch_ServiceStartStop(b *testing.B) {
 	transport := localtransport.New()
 
 	gateway := zephyr.NewGateway("bench-gateway", transport)
-	gateway.Start()
-	defer gateway.Stop()
+	startGateway(b, gateway)
+	defer gateway.Close()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -163,8 +163,8 @@ func BenchmarkLocalDispatch_ServiceStartStop(b *testing.B) {
 			transport,
 			simpleHandler,
 		)
-		service.Start()
-		service.Stop()
+		startService(b, service)
+		service.Close()
 	}
 }
 
@@ -177,11 +177,11 @@ func TestLocalDispatchMemoryProfile(t *testing.T) {
 	transport := localtransport.New()
 
 	gateway := zephyr.NewGateway("profile-gateway", transport)
-	gateway.Start()
-	defer gateway.Stop()
+	startGateway(t, gateway)
+	defer gateway.Close()
 
-	service := setupBenchService(transport, "profile-service")
-	defer service.Stop()
+	service := setupBenchService(t, transport, "profile-service")
+	defer service.Close()
 
 	const iterations = 5000
 	const sampleInterval = 500
@@ -233,8 +233,8 @@ func TestLocalServiceRegistrationMemory(t *testing.T) {
 	transport := localtransport.New()
 
 	gateway := zephyr.NewGateway("test-gateway", transport)
-	gateway.Start()
-	defer gateway.Stop()
+	startGateway(t, gateway)
+	defer gateway.Close()
 
 	initialGoroutines := runtime.NumGoroutine()
 	t.Logf("Initial goroutines: %d", initialGoroutines)
@@ -244,8 +244,8 @@ func TestLocalServiceRegistrationMemory(t *testing.T) {
 	// Warmup
 	for i := 0; i < 10; i++ {
 		service := zephyr.NewService(fmt.Sprintf("warmup-%d", i), transport, simpleHandler)
-		service.Start()
-		service.Stop()
+		startService(t, service)
+		service.Close()
 	}
 
 	runtime.GC()
@@ -254,7 +254,7 @@ func TestLocalServiceRegistrationMemory(t *testing.T) {
 
 	for i := 0; i < cycles; i++ {
 		service := zephyr.NewService(fmt.Sprintf("cycle-service-%d", i), transport, simpleHandler)
-		service.Start()
+		startService(t, service)
 
 		// Do some work
 		for j := 0; j < 50; j++ {
@@ -263,7 +263,7 @@ func TestLocalServiceRegistrationMemory(t *testing.T) {
 			transport.Dispatch(fmt.Sprintf("cycle-service-%d", i), rec, req)
 		}
 
-		service.Stop()
+		service.Close()
 	}
 
 	runtime.GC()

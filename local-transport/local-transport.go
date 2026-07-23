@@ -2,6 +2,7 @@ package localtransport
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/RobertWHurst/zephyr"
 	"github.com/telemetrytv/trace"
@@ -14,8 +15,10 @@ var (
 )
 
 type LocalTransport struct {
-	gatewayAnnounceHandlers []func(gatewayDescriptor *zephyr.GatewayDescriptor)
-	serviceAnnounceHandlers []func(serviceDescriptor *zephyr.ServiceDescriptor)
+	mu                      sync.RWMutex
+	nextHandlerID           uint64
+	gatewayAnnounceHandlers map[uint64]func(gatewayDescriptor *zephyr.GatewayDescriptor)
+	serviceAnnounceHandlers map[uint64]func(serviceDescriptor *zephyr.ServiceDescriptor)
 	dispatchHandlers        map[string]func(responseWriter http.ResponseWriter, request *http.Request)
 }
 
@@ -24,6 +27,23 @@ var _ zephyr.Transport = &LocalTransport{}
 func New() *LocalTransport {
 	transportLocalDebug.Trace("Creating new local transport")
 	return &LocalTransport{
-		dispatchHandlers: map[string]func(responseWriter http.ResponseWriter, request *http.Request){},
+		gatewayAnnounceHandlers: map[uint64]func(gatewayDescriptor *zephyr.GatewayDescriptor){},
+		serviceAnnounceHandlers: map[uint64]func(serviceDescriptor *zephyr.ServiceDescriptor){},
+		dispatchHandlers:        map[string]func(responseWriter http.ResponseWriter, request *http.Request){},
+	}
+}
+
+func (c *LocalTransport) registerHandler() uint64 {
+	c.nextHandlerID++
+	return c.nextHandlerID
+}
+
+func signalReady(ready chan<- struct{}) {
+	if ready == nil {
+		return
+	}
+	select {
+	case ready <- struct{}{}:
+	default:
 	}
 }

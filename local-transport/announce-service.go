@@ -1,15 +1,25 @@
 package localtransport
 
-import "github.com/RobertWHurst/zephyr"
+import (
+	"context"
+
+	"github.com/RobertWHurst/zephyr"
+)
 
 func (c *LocalTransport) AnnounceService(serviceDescriptor *zephyr.ServiceDescriptor) error {
 	transportLocalAnnounceDebug.Tracef("Announcing service %s with %d routes",
 		serviceDescriptor.Name, len(serviceDescriptor.RouteDescriptors))
 
+	c.mu.RLock()
 	handlerCount := len(c.serviceAnnounceHandlers)
+	handlers := make([]func(serviceDescriptor *zephyr.ServiceDescriptor), 0, len(c.serviceAnnounceHandlers))
+	for _, handler := range c.serviceAnnounceHandlers {
+		handlers = append(handlers, handler)
+	}
+	c.mu.RUnlock()
 	transportLocalAnnounceDebug.Tracef("Notifying %d service announcement handlers", handlerCount)
 
-	for _, handler := range c.serviceAnnounceHandlers {
+	for _, handler := range handlers {
 		handler(serviceDescriptor)
 	}
 
@@ -17,16 +27,19 @@ func (c *LocalTransport) AnnounceService(serviceDescriptor *zephyr.ServiceDescri
 	return nil
 }
 
-func (c *LocalTransport) BindServiceAnnounce(handler func(serviceDescriptor *zephyr.ServiceDescriptor)) error {
-	transportLocalAnnounceDebug.Trace("Binding service announcement handler")
-	c.serviceAnnounceHandlers = append(c.serviceAnnounceHandlers, handler)
+func (c *LocalTransport) HandleServiceAnnouncements(ctx context.Context, ready chan<- struct{}, handler func(serviceDescriptor *zephyr.ServiceDescriptor)) error {
+	transportLocalAnnounceDebug.Trace("Handling service announcements")
+	c.mu.Lock()
+	id := c.registerHandler()
+	c.serviceAnnounceHandlers[id] = handler
 	transportLocalAnnounceDebug.Tracef("Now have %d service announcement handlers", len(c.serviceAnnounceHandlers))
-	return nil
-}
+	c.mu.Unlock()
+	signalReady(ready)
 
-func (c *LocalTransport) UnbindServiceAnnounce() error {
+	<-ctx.Done()
+	c.mu.Lock()
 	transportLocalAnnounceDebug.Tracef("Unbinding %d service announcement handlers", len(c.serviceAnnounceHandlers))
-	c.serviceAnnounceHandlers = nil
-	transportLocalAnnounceDebug.Trace("All service announcement handlers unbound")
+	delete(c.serviceAnnounceHandlers, id)
+	c.mu.Unlock()
 	return nil
 }

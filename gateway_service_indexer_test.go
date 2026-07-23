@@ -224,24 +224,23 @@ func TestGateway_AnnouncePromptsStaleServiceToReAnnounce(t *testing.T) {
 		transport := localtransport.New()
 
 		gateway := zephyr.NewGateway("test-gateway", transport)
-		err := gateway.Start()
+		err := startGateway(t, gateway)
 		assert.NoError(t, err)
-		defer gateway.Stop()
+		defer gateway.Close()
 
 		// Start a service — it announces and the gateway indexes it
 		service := zephyr.NewService("test-service", transport, simpleHandler)
-		err = service.Start()
+		err = startService(t, service)
 		assert.NoError(t, err)
-		defer service.Stop()
+		defer service.Close()
 
 		// Track re-announcements from the service
 		reannounced := false
-		err = transport.BindServiceAnnounce(func(d *zephyr.ServiceDescriptor) {
+		watchServiceAnnouncements(t, transport, func(d *zephyr.ServiceDescriptor) {
 			if d.Name == "test-service" {
 				reannounced = true
 			}
 		})
-		assert.NoError(t, err)
 
 		// Simulate gateway announcing WITHOUT the service in the list.
 		// The service should re-announce itself.
@@ -258,17 +257,16 @@ func TestGateway_AnnouncePromptsStaleServiceToReAnnounce(t *testing.T) {
 		transport := localtransport.New()
 
 		service := zephyr.NewService("test-service", transport, simpleHandler)
-		err := service.Start()
+		err := startService(t, service)
 		assert.NoError(t, err)
-		defer service.Stop()
+		defer service.Close()
 
 		reannounced := false
-		err = transport.BindServiceAnnounce(func(d *zephyr.ServiceDescriptor) {
+		watchServiceAnnouncements(t, transport, func(d *zephyr.ServiceDescriptor) {
 			if d.Name == "test-service" {
 				reannounced = true
 			}
 		})
-		assert.NoError(t, err)
 
 		// Announce WITH the service in the list
 		err = transport.AnnounceGateway(&zephyr.GatewayDescriptor{
