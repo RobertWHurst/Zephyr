@@ -61,7 +61,7 @@ We do this using the `zephyr.NewService` function, which takes three arguments:
 
 ```go
 service := zephyr.NewService("myservice", natstransport.New(natsConn), Handler)
-service.Run()
+service.Listen(context.Background())  // Blocks, like http.ListenAndServe
 ```
 
 A more complete illustration can be found in the example below.
@@ -76,6 +76,7 @@ how Zephyr can be used with any http library, in this case Navaros.
 package main
 
 import (
+  "context"
   "fmt"
   "net/http"
 
@@ -112,8 +113,8 @@ func main() {
   // Create a new service
   service := zephyr.NewService("myservice", natstransport.New(conn), Router)
 
-  // Run the service
-  if err := service.Run(); err != nil {
+  // Listen blocks until the context is canceled or service.Close is called
+  if err := service.Listen(context.Background()); err != nil {
     fmt.Printf("Failed to run service: %s\n", err)
   }
 }
@@ -244,6 +245,8 @@ The returned gateway can then be used as an http.Handler with go's http package.
 
 ```go
 gateway := zephyr.NewGateway("mygateway", natstransport.New(natsConn))
+go gateway.Connect(context.Background())  // Joins the transport; blocks until Close
+<-gateway.Ready()                         // Optional: wait for the first announce
 http.ListenAndServe(":8080", gateway)
 ```
 
@@ -257,7 +260,9 @@ port 8080, and forwards them to the service we created in the previous example.
 package main
 
 import (
+  "context"
   "fmt"
+  "log"
   "net/http"
 
   "github.com/nats-io/nats.go"
@@ -275,8 +280,15 @@ func main() {
     return
   }
 
-  // Create a new gateway
+  // Create a new gateway and join it to the transport. Connect blocks like
+  // http.ListenAndServe, so run it in a goroutine.
   gateway := zephyr.NewGateway("mygateway", natstransport.New(conn))
+  go func() {
+    if err := gateway.Connect(context.Background()); err != nil {
+      log.Fatal(err)
+    }
+  }()
+  defer gateway.Close()
 
   // Listen for requests
   if err := http.ListenAndServe(":8080", gateway); err != nil {

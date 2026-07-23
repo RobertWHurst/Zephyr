@@ -6,11 +6,12 @@ import (
 	"math/rand"
 	"net/http"
 	"slices"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/RobertWHurst/navaros"
 	"github.com/telemetrytv/trace"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -19,6 +20,9 @@ var (
 	gatewayIndexerDebug = trace.Bind("zephyr:gateway:indexer")
 )
 
+// GatewayAnnounceInterval is the default interval between gateway
+// announcements. It is jittered per process so a fleet of gateways does not
+// announce in lockstep.
 var GatewayAnnounceInterval = time.Duration((8 + rand.Intn(2))) * time.Second
 
 // ContextKeyRouteDescriptor is the key used to store the matched route
@@ -36,11 +40,12 @@ const ContextKeyServiceDescriptors = "zephyr:service-descriptors"
 type Gateway struct {
 	Name      string
 	Transport Transport
-	gsi       *GatewayServiceIndexer
 
-	lifecycleMu   sync.Mutex
-	closeCancel   context.CancelFunc
-	lifecycleDone chan struct{}
+	AnnounceInterval time.Duration
+
+	gsi atomic.Pointer[GatewayServiceIndexer]
+
+	lifecycle lifecycle
 }
 
 var _ http.Handler = &Gateway{}
@@ -48,157 +53,122 @@ var _ navaros.Handler = &Gateway{}
 
 func NewGateway(name string, transport Transport) *Gateway {
 	return &Gateway{
-		Name:      name,
-		Transport: transport,
+		Name:             name,
+		Transport:        transport,
+		AnnounceInterval: GatewayAnnounceInterval,
 	}
 }
 
-// Announce runs a loop which sends a message to all services periodically,
-// introducing them to this gateway if they are not already aware of it.
-// The announcement message contains information about the services that
-// this gateway is aware of. Services that do not see themselves in the
-// announcement message are expected to send a reply to the gateway with their
-// routing information.
+// Connect joins the gateway to the transport and blocks until the context is
+// canceled, Close is called, or a transport stream fails. A gateway may be
+// connected again after a clean shutdown.
 func (g *Gateway) Connect(ctx context.Context) error {
 	gatewayDebug.Tracef("Connecting gateway %s", g.Name)
-	if g.gsi != nil {
-		gatewayDebug.Trace("Gateway already connected")
-		return fmt.Errorf("gateway already connected")
-	}
-
-	gatewayIndexerDebug.Trace("Initializing service indexer")
-	g.gsi = &GatewayServiceIndexer{
-		ServiceDescriptors: []*ServiceDescriptor{},
-	}
 
 	if g.Transport == nil {
 		gatewayDebug.Trace("Transport not provided")
-		return fmt.Errorf(
-			"cannot connect local service. The associated gateway already handles " +
-				"incoming requests",
-		)
+		return ErrNoTransport
 	}
 
-	connectCtx, cancel := context.WithCancel(ctx)
-	if err := g.setCloseCancel(cancel); err != nil {
-		cancel()
+	connectCtx, err := g.lifecycle.begin(ctx, ErrGatewayAlreadyConnected)
+	if err != nil {
+		gatewayDebug.Trace("Gateway already connected")
 		return err
 	}
-	defer close(g.lifecycleDone)
-	defer g.clearCloseCancel()
-	defer cancel()
-	defer func() {
-		gatewayDebug.Trace("Closing service indexer")
-		g.gsi.Close()
-	}()
+	defer g.lifecycle.end()
 
-	ready := make(chan struct{}, 1)
-	errCh := make(chan error, 3)
-	var wg sync.WaitGroup
-	goRun := func(name string, fn func() error) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := fn(); err != nil {
-				select {
-				case errCh <- fmt.Errorf("%s: %w", name, err):
-				case <-connectCtx.Done():
-				}
-			}
-		}()
-	}
+	gatewayIndexerDebug.Trace("Initializing service indexer")
+	gsi := &GatewayServiceIndexer{}
+	g.gsi.Store(gsi)
+	defer gsi.Close()
 
-	gatewayDebug.Trace("Handling service announcements")
-	goRun("service announcements", func() error {
-		return g.Transport.HandleServiceAnnouncements(connectCtx, ready, func(serviceDescriptor *ServiceDescriptor) {
-			gatewayIndexerDebug.Tracef("Received service announcement from %s", serviceDescriptor.Name)
-
-			announcingToThisGateway := len(serviceDescriptor.GatewayNames) == 0
-			if !announcingToThisGateway {
-				if slices.Contains(serviceDescriptor.GatewayNames, g.Name) {
-					announcingToThisGateway = true
-				}
-			}
-			if !announcingToThisGateway {
-				gatewayIndexerDebug.Tracef("Service %s not announcing to this gateway", serviceDescriptor.Name)
-				return
-			}
-
-			gatewayIndexerDebug.Tracef("Indexing service %s with %d routes",
-				serviceDescriptor.Name, len(serviceDescriptor.RouteDescriptors))
-			if err := g.gsi.SetServiceDescriptor(serviceDescriptor); err != nil {
-				gatewayIndexerDebug.Tracef("Failed to index service %s: %v", serviceDescriptor.Name, err)
-				panic(err)
-			}
-		})
-	})
-	goRun("prune loop", func() error {
-		g.pruneLoop(connectCtx)
-		return nil
-	})
-	goRun("announce loop", func() error {
-		g.announceLoop(connectCtx)
-		return nil
-	})
-
-	select {
-	case <-ready:
-	case err := <-errCh:
-		cancel()
-		wg.Wait()
+	grp, grpCtx := errgroup.WithContext(connectCtx)
+	finish := func(err error) error {
+		g.lifecycle.interrupt()
+		if waitErr := grp.Wait(); waitErr != nil && err == nil {
+			err = waitErr
+		}
 		return err
-	case <-connectCtx.Done():
-		cancel()
-		wg.Wait()
-		return nil
 	}
+
+	announceSub, err := g.Transport.SubscribeServiceAnnouncements(grpCtx, func(serviceDescriptor *ServiceDescriptor) {
+		g.handleServiceAnnouncement(gsi, serviceDescriptor)
+	})
+	if err != nil {
+		return finish(fmt.Errorf("service announcements: %w", err))
+	}
+	grp.Go(func() error {
+		if err := announceSub.Serve(grpCtx); err != nil {
+			return fmt.Errorf("service announcements: %w", err)
+		}
+		return nil
+	})
+
+	grp.Go(func() error {
+		g.announceLoop(grpCtx, gsi)
+		return nil
+	})
+	grp.Go(func() error {
+		g.pruneLoop(grpCtx, gsi)
+		return nil
+	})
 
 	gatewayDebug.Tracef("Announcing gateway %s", g.Name)
 	if err := g.Transport.AnnounceGateway(&GatewayDescriptor{
 		Name:               g.Name,
-		ServiceDescriptors: g.gsi.ServiceDescriptors,
+		ServiceDescriptors: gsi.Descriptors(),
 	}); err != nil {
-		cancel()
-		wg.Wait()
-		return err
+		return finish(err)
 	}
 
-	select {
-	case err := <-errCh:
-		cancel()
-		wg.Wait()
-		return err
-	case <-connectCtx.Done():
-		cancel()
-		wg.Wait()
-		return nil
-	}
+	g.lifecycle.markReady()
+	return finish(grp.Wait())
 }
 
+// Close interrupts a running Connect call and waits for it to return. It is
+// safe to call multiple times, and is a no-op when the gateway is not
+// connected.
 func (g *Gateway) Close() error {
-	g.lifecycleMu.Lock()
-	cancel := g.closeCancel
-	done := g.lifecycleDone
-	g.lifecycleMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	if done != nil {
-		<-done
-	}
+	gatewayDebug.Tracef("Closing gateway %s", g.Name)
+	g.lifecycle.close()
 	return nil
+}
+
+// Ready returns a channel that is closed once the current Connect call has
+// subscribed its transport streams and announced the gateway. It is intended
+// for startup sequencing and readiness probes.
+func (g *Gateway) Ready() <-chan struct{} {
+	return g.lifecycle.readyChan()
+}
+
+func (g *Gateway) handleServiceAnnouncement(gsi *GatewayServiceIndexer, serviceDescriptor *ServiceDescriptor) {
+	gatewayIndexerDebug.Tracef("Received service announcement from %s", serviceDescriptor.Name)
+
+	announcingToThisGateway := len(serviceDescriptor.GatewayNames) == 0 ||
+		slices.Contains(serviceDescriptor.GatewayNames, g.Name)
+	if !announcingToThisGateway {
+		gatewayIndexerDebug.Tracef("Service %s not announcing to this gateway", serviceDescriptor.Name)
+		return
+	}
+
+	gatewayIndexerDebug.Tracef("Indexing service %s with %d routes",
+		serviceDescriptor.Name, len(serviceDescriptor.RouteDescriptors))
+	if err := gsi.SetServiceDescriptor(serviceDescriptor); err != nil {
+		gatewayIndexerDebug.Tracef("Failed to index service %s: %v", serviceDescriptor.Name, err)
+	}
 }
 
 func (g *Gateway) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	gatewayRouteDebug.Tracef("Received HTTP request %s %s", req.Method, req.URL.Path)
 
-	if g.gsi == nil {
-		gatewayRouteDebug.Trace("Gateway not started, returning 503")
+	gsi := g.gsi.Load()
+	if gsi == nil {
+		gatewayRouteDebug.Trace("Gateway not connected, returning 503")
 		res.WriteHeader(503)
 		return
 	}
 
-	sd, _, ok := g.gsi.ResolveService(req.Method, req.URL.Path)
+	sd, _, ok := gsi.ResolveService(req.Method, req.URL.Path)
 	if !ok {
 		gatewayRouteDebug.Tracef("No service found for %s %s, returning 404", req.Method, req.URL.Path)
 		res.WriteHeader(404)
@@ -218,12 +188,13 @@ func (g *Gateway) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 func (g *Gateway) CanServeHTTP(req *http.Request) bool {
 	gatewayRouteDebug.Tracef("Checking if gateway can serve %s %s", req.Method, req.URL.Path)
 
-	if g.gsi == nil {
-		gatewayRouteDebug.Trace("Gateway not started, cannot serve request")
+	gsi := g.gsi.Load()
+	if gsi == nil {
+		gatewayRouteDebug.Trace("Gateway not connected, cannot serve request")
 		return false
 	}
 
-	_, _, ok := g.gsi.ResolveService(req.Method, req.URL.Path)
+	_, _, ok := gsi.ResolveService(req.Method, req.URL.Path)
 	if ok {
 		gatewayRouteDebug.Tracef("Can serve %s %s", req.Method, req.URL.Path)
 	} else {
@@ -237,13 +208,14 @@ func (g *Gateway) Handle(ctx *navaros.Context) {
 	path := ctx.Path()
 	gatewayRouteDebug.Tracef("Received Navaros request %s %s", method, path)
 
-	if g.gsi == nil {
-		gatewayRouteDebug.Trace("Gateway not started, skipping to next handler")
+	gsi := g.gsi.Load()
+	if gsi == nil {
+		gatewayRouteDebug.Trace("Gateway not connected, skipping to next handler")
 		ctx.Next()
 		return
 	}
 
-	sd, rd, ok := g.gsi.ResolveService(string(method), path)
+	sd, rd, ok := gsi.ResolveService(string(method), path)
 	if !ok {
 		gatewayRouteDebug.Tracef("No service found for %s %s, skipping to next handler", method, path)
 		ctx.Next()
@@ -270,12 +242,13 @@ func (g *Gateway) CanHandle(ctx *navaros.Context) bool {
 	path := ctx.Path()
 	gatewayRouteDebug.Tracef("Checking if gateway can handle Navaros request %s %s", method, path)
 
-	if g.gsi == nil {
-		gatewayRouteDebug.Trace("Gateway not started, cannot handle request")
+	gsi := g.gsi.Load()
+	if gsi == nil {
+		gatewayRouteDebug.Trace("Gateway not connected, cannot handle request")
 		return false
 	}
 
-	_, _, ok := g.gsi.ResolveService(string(method), path)
+	_, _, ok := gsi.ResolveService(string(method), path)
 	if ok {
 		gatewayRouteDebug.Tracef("Can handle %s %s", method, path)
 	} else {
@@ -284,8 +257,8 @@ func (g *Gateway) CanHandle(ctx *navaros.Context) bool {
 	return ok
 }
 
-func (g *Gateway) announceLoop(ctx context.Context) {
-	ticker := time.NewTicker(GatewayAnnounceInterval)
+func (g *Gateway) announceLoop(ctx context.Context, gsi *GatewayServiceIndexer) {
+	ticker := time.NewTicker(g.AnnounceInterval)
 	defer ticker.Stop()
 
 	for {
@@ -296,7 +269,7 @@ func (g *Gateway) announceLoop(ctx context.Context) {
 			// Only include fresh services in the announcement. Stale services
 			// are excluded so they don't see themselves in the list — this
 			// prompts them to re-announce if still alive.
-			fresh := g.gsi.FreshServiceDescriptors(3 * GatewayAnnounceInterval)
+			fresh := gsi.FreshServiceDescriptors(3 * g.AnnounceInterval)
 			gatewayDebug.Tracef("Periodic announce for gateway %s (%d fresh services)", g.Name, len(fresh))
 			if err := g.Transport.AnnounceGateway(&GatewayDescriptor{
 				Name:               g.Name,
@@ -308,8 +281,8 @@ func (g *Gateway) announceLoop(ctx context.Context) {
 	}
 }
 
-func (g *Gateway) pruneLoop(ctx context.Context) {
-	ticker := time.NewTicker(GatewayAnnounceInterval)
+func (g *Gateway) pruneLoop(ctx context.Context, gsi *GatewayServiceIndexer) {
+	ticker := time.NewTicker(g.AnnounceInterval)
 	defer ticker.Stop()
 
 	for {
@@ -317,27 +290,9 @@ func (g *Gateway) pruneLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			g.gsi.PruneStaleServices(5 * GatewayAnnounceInterval)
+			gsi.PruneStaleServices(5 * g.AnnounceInterval)
 		}
 	}
-}
-
-func (g *Gateway) setCloseCancel(cancel context.CancelFunc) error {
-	g.lifecycleMu.Lock()
-	defer g.lifecycleMu.Unlock()
-	if g.closeCancel != nil {
-		return fmt.Errorf("gateway already connected")
-	}
-	g.closeCancel = cancel
-	g.lifecycleDone = make(chan struct{})
-	return nil
-}
-
-func (g *Gateway) clearCloseCancel() {
-	g.lifecycleMu.Lock()
-	g.closeCancel = nil
-	g.lifecycleDone = nil
-	g.lifecycleMu.Unlock()
 }
 
 // DescriptorMiddleware returns a navaros middleware that resolves the
@@ -346,12 +301,12 @@ func (g *Gateway) clearCloseCancel() {
 // RouteDescriptorFromContext.
 func (g *Gateway) DescriptorMiddleware() navaros.HandlerFunc {
 	return func(ctx *navaros.Context) {
-		if g.gsi != nil {
-			ctx.Set(ContextKeyServiceDescriptors, g.gsi.ServiceDescriptors)
+		if gsi := g.gsi.Load(); gsi != nil {
+			ctx.Set(ContextKeyServiceDescriptors, gsi.Descriptors())
 
 			method := string(ctx.Method())
 			path := ctx.Path()
-			if sd, rd, ok := g.gsi.ResolveService(method, path); ok && rd != nil {
+			if sd, rd, ok := gsi.ResolveService(method, path); ok && rd != nil {
 				ctx.Set(ContextKeyRouteDescriptor, rd)
 				ctx.Set(ContextKeyServiceDescriptor, sd)
 			}

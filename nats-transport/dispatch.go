@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -12,6 +11,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/RobertWHurst/zephyr"
 	"github.com/nats-io/nats.go"
 	"github.com/telemetrytv/trace"
 	"github.com/vmihailenco/msgpack/v5"
@@ -290,7 +290,11 @@ func (c *NatsTransport) Dispatch(serviceName string, res http.ResponseWriter, re
 	return nil
 }
 
-func (c *NatsTransport) HandleDispatch(ctx context.Context, ready chan<- struct{}, serviceName string, handler func(res http.ResponseWriter, req *http.Request)) error {
+// SubscribeDispatch subscribes a service instance to dispatched requests.
+// Instances of the same service share a queue group, so each request is
+// handled by exactly one instance. Requests are handled concurrently, bounded
+// by the transport's max concurrent handlers.
+func (c *NatsTransport) SubscribeDispatch(ctx context.Context, serviceName string, handler func(res http.ResponseWriter, req *http.Request)) (zephyr.Subscription, error) {
 	dispatchSubject := namespace("service", serviceName)
 	sub, err := c.NatsConnection.QueueSubscribe(dispatchSubject, dispatchSubject, func(msg *nats.Msg) {
 		c.dispatchHandlerWg.Add(1)
@@ -299,30 +303,26 @@ func (c *NatsTransport) HandleDispatch(ctx context.Context, ready chan<- struct{
 			defer func() { <-c.handlerSem }()
 			defer c.dispatchHandlerWg.Done()
 			if err := c.handleDispatch(msg, handler); err != nil {
-				panic(err)
+				transportNatsDispatchDebug.Tracef("Failed to handle dispatched request: %v", err)
 			}
 		}()
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer func() {
+	if err := c.flush(ctx); err != nil {
+		_ = sub.Unsubscribe()
+		return nil, err
+	}
+
+	return zephyr.SubscriptionFunc(func(ctx context.Context) error {
+		<-ctx.Done()
 		if err := sub.Unsubscribe(); err != nil {
 			transportNatsDispatchDebug.Tracef("Failed to unsubscribe from dispatch subject: %v", err)
 		}
 		c.dispatchHandlerWg.Wait()
-	}()
-
-	if err := flushWithContext(ctx, c.NatsConnection); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil
-		}
-		return err
-	}
-
-	signalReady(ready)
-	<-ctx.Done()
-	return nil
+		return nil
+	}), nil
 }
 
 type requestReader struct {

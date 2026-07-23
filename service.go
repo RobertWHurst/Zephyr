@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"sync"
+	"slices"
 
 	"github.com/RobertWHurst/navaros"
 	"github.com/telemetrytv/trace"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -53,9 +54,7 @@ type Service struct {
 	// either a Navaros router or a standard http.Handler or http.HandlerFunc.
 	Handler any
 
-	lifecycleMu   sync.Mutex
-	closeCancel   context.CancelFunc
-	lifecycleDone chan struct{}
+	lifecycle lifecycle
 }
 
 // NewService creates a new service with the given name, connection, and handler.
@@ -70,128 +69,100 @@ func NewService(name string, transport Transport, handler any) *Service {
 	}
 }
 
-// Listen starts the service and blocks until the context is canceled, Close is
-// called, or a required transport stream fails.
+// Listen starts the service and blocks until the context is canceled, Close
+// is called, or a transport stream fails. A service may listen again after a
+// clean shutdown.
 func (s *Service) Listen(ctx context.Context) error {
 	serviceDebug.Tracef("Listening as service %s", s.Name)
+
 	if s.Transport == nil {
 		serviceDebug.Trace("Transport not provided")
-		return fmt.Errorf(
-			"cannot listen as local service. The associated gateway already handles " +
-				"incoming requests",
-		)
+		return ErrNoTransport
 	}
 
-	listenCtx, cancel := context.WithCancel(ctx)
-	if err := s.setCloseCancel(cancel); err != nil {
-		cancel()
+	listenCtx, err := s.lifecycle.begin(ctx, ErrServiceAlreadyListening)
+	if err != nil {
+		serviceDebug.Trace("Service already listening")
 		return err
 	}
-	defer close(s.lifecycleDone)
-	defer s.clearCloseCancel()
-	defer cancel()
+	defer s.lifecycle.end()
 
-	ready := make(chan struct{}, 2)
-	errCh := make(chan error, 2)
-	var wg sync.WaitGroup
-	goRun := func(name string, fn func() error) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := fn(); err != nil {
-				select {
-				case errCh <- fmt.Errorf("%s: %w", name, err):
-				case <-listenCtx.Done():
-				}
-			}
-		}()
+	grp, grpCtx := errgroup.WithContext(listenCtx)
+	finish := func(err error) error {
+		s.lifecycle.interrupt()
+		if waitErr := grp.Wait(); waitErr != nil && err == nil {
+			err = waitErr
+		}
+		return err
 	}
 
-	serviceDebug.Trace("Handling gateway announcements")
-	goRun("gateway announcements", func() error {
-		return s.Transport.HandleGatewayAnnouncements(listenCtx, ready, func(gatewayDescriptor *GatewayDescriptor) {
-			s.handleGatewayAnnounce(listenCtx, gatewayDescriptor)
-		})
-	})
-
-	serviceDebug.Trace("Handling dispatch")
-	goRun("dispatch", func() error {
-		return s.Transport.HandleDispatch(listenCtx, ready, s.Name, func(res http.ResponseWriter, req *http.Request) {
-			serviceHandleDebug.Tracef("Handling request %s %s", req.Method, req.URL.Path)
-
-			ctx := navaros.NewContext(res, req, s.Handler)
-			ctx.Next()
-			navaros.CtxFinalize(ctx)
-			navaros.CtxFree(ctx)
-
-			serviceHandleDebug.Tracef("Completed handling request %s %s", req.Method, req.URL.Path)
-		})
-	})
-
-	for i := 0; i < 2; i++ {
-		select {
-		case <-ready:
-		case err := <-errCh:
-			cancel()
-			wg.Wait()
-			return err
-		case <-listenCtx.Done():
-			cancel()
-			wg.Wait()
-			return nil
+	streams := []struct {
+		name      string
+		subscribe func(context.Context) (Subscription, error)
+	}{
+		{"gateway announcements", func(ctx context.Context) (Subscription, error) {
+			return s.Transport.SubscribeGatewayAnnouncements(ctx, s.handleGatewayAnnounce)
+		}},
+		{"dispatch", func(ctx context.Context) (Subscription, error) {
+			return s.Transport.SubscribeDispatch(ctx, s.Name, s.handleDispatch)
+		}},
+	}
+	for _, stream := range streams {
+		sub, err := stream.subscribe(grpCtx)
+		if err != nil {
+			return finish(fmt.Errorf("%s: %w", stream.name, err))
 		}
+		name := stream.name
+		grp.Go(func() error {
+			if err := sub.Serve(grpCtx); err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+			return nil
+		})
 	}
 
 	serviceDebug.Trace("Announcing service to gateways")
 	if err := s.doAnnounce(); err != nil {
-		cancel()
-		wg.Wait()
 		serviceDebug.Tracef("Failed to announce service: %v", err)
-		return err
+		return finish(err)
 	}
 
-	select {
-	case err := <-errCh:
-		cancel()
-		wg.Wait()
-		return err
-	case <-listenCtx.Done():
-		cancel()
-		wg.Wait()
-		return nil
-	}
+	s.lifecycle.markReady()
+	return finish(grp.Wait())
 }
 
-// Close interrupts a running Listen call. It is safe to call multiple times.
+// Close interrupts a running Listen call and waits for it to return. It is
+// safe to call multiple times, and is a no-op when the service is not
+// listening.
 func (s *Service) Close() error {
-	s.lifecycleMu.Lock()
-	cancel := s.closeCancel
-	done := s.lifecycleDone
-	s.lifecycleMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	if done != nil {
-		<-done
-	}
+	serviceDebug.Tracef("Closing service %s", s.Name)
+	s.lifecycle.close()
 	return nil
 }
 
-func (s *Service) handleGatewayAnnounce(ctx context.Context, gatewayDescriptor *GatewayDescriptor) {
-	serviceAnnounceDebug.Tracef("Received gateway announcement from %s", gatewayDescriptor.Name)
-	if ctx.Err() != nil {
-		return
-	}
+// Ready returns a channel that is closed once the current Listen call has
+// subscribed its transport streams and announced the service. It is intended
+// for startup sequencing and readiness probes.
+func (s *Service) Ready() <-chan struct{} {
+	return s.lifecycle.readyChan()
+}
 
-	isWantedGateway := len(s.GatewayNames) == 0
-	if !isWantedGateway {
-		for _, name := range s.GatewayNames {
-			if name == gatewayDescriptor.Name {
-				isWantedGateway = true
-				break
-			}
-		}
-	}
+func (s *Service) handleDispatch(res http.ResponseWriter, req *http.Request) {
+	serviceHandleDebug.Tracef("Handling request %s %s", req.Method, req.URL.Path)
+
+	ctx := navaros.NewContext(res, req, s.Handler)
+	ctx.Next()
+	navaros.CtxFinalize(ctx)
+	navaros.CtxFree(ctx)
+
+	serviceHandleDebug.Tracef("Completed handling request %s %s", req.Method, req.URL.Path)
+}
+
+func (s *Service) handleGatewayAnnounce(gatewayDescriptor *GatewayDescriptor) {
+	serviceAnnounceDebug.Tracef("Received gateway announcement from %s", gatewayDescriptor.Name)
+
+	isWantedGateway := len(s.GatewayNames) == 0 ||
+		slices.Contains(s.GatewayNames, gatewayDescriptor.Name)
 	if !isWantedGateway {
 		serviceAnnounceDebug.Tracef("Ignoring announcement from unwanted gateway %s", gatewayDescriptor.Name)
 		return
@@ -211,7 +182,6 @@ func (s *Service) handleGatewayAnnounce(ctx context.Context, gatewayDescriptor *
 		serviceAnnounceDebug.Trace("Service not found in gateway's service index, announcing service")
 		if err := s.doAnnounce(); err != nil {
 			serviceAnnounceDebug.Tracef("Failed to announce service: %v", err)
-			panic(err)
 		}
 	}
 }
@@ -249,22 +219,4 @@ func (s *Service) doAnnounce() error {
 		GatewayNames:     s.GatewayNames,
 		RouteDescriptors: routeDescriptors,
 	})
-}
-
-func (s *Service) setCloseCancel(cancel context.CancelFunc) error {
-	s.lifecycleMu.Lock()
-	defer s.lifecycleMu.Unlock()
-	if s.closeCancel != nil {
-		return fmt.Errorf("service already listening")
-	}
-	s.closeCancel = cancel
-	s.lifecycleDone = make(chan struct{})
-	return nil
-}
-
-func (s *Service) clearCloseCancel() {
-	s.lifecycleMu.Lock()
-	s.closeCancel = nil
-	s.lifecycleDone = nil
-	s.lifecycleMu.Unlock()
 }

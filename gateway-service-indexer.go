@@ -132,3 +132,17 @@ func (r *GatewayServiceIndexer) ResolveService(method string, path string) (*Ser
 	}
 	return nil, nil, false
 }
+
+// Descriptors returns a snapshot of the current service descriptors.
+func (r *GatewayServiceIndexer) Descriptors() []*ServiceDescriptor {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.closed {
+		return nil
+	}
+
+	descriptors := make([]*ServiceDescriptor, len(r.ServiceDescriptors))
+	copy(descriptors, r.ServiceDescriptors)
+	return descriptors
+}

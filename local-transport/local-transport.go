@@ -1,6 +1,7 @@
 package localtransport
 
 import (
+	"context"
 	"net/http"
 	"sync"
 
@@ -14,6 +15,8 @@ var (
 	transportLocalAnnounceDebug = trace.Bind("zephyr:transport:local:announce")
 )
 
+// LocalTransport is an in-process transport for development and testing.
+// Handlers run synchronously on the caller's goroutine.
 type LocalTransport struct {
 	mu                      sync.RWMutex
 	nextHandlerID           uint64
@@ -33,17 +36,18 @@ func New() *LocalTransport {
 	}
 }
 
-func (c *LocalTransport) registerHandler() uint64 {
-	c.nextHandlerID++
-	return c.nextHandlerID
+// registerHandlerID must be called with t.mu held.
+func (t *LocalTransport) registerHandlerID() uint64 {
+	t.nextHandlerID++
+	return t.nextHandlerID
 }
 
-func signalReady(ready chan<- struct{}) {
-	if ready == nil {
-		return
-	}
-	select {
-	case ready <- struct{}{}:
-	default:
-	}
+// untilDone returns a Subscription that blocks until the serve context is
+// canceled, then runs unregister.
+func untilDone(unregister func()) zephyr.Subscription {
+	return zephyr.SubscriptionFunc(func(ctx context.Context) error {
+		<-ctx.Done()
+		unregister()
+		return nil
+	})
 }

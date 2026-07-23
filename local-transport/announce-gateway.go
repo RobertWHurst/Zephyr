@@ -6,40 +6,36 @@ import (
 	"github.com/RobertWHurst/zephyr"
 )
 
-func (c *LocalTransport) AnnounceGateway(gatewayDescriptor *zephyr.GatewayDescriptor) error {
+func (t *LocalTransport) AnnounceGateway(gatewayDescriptor *zephyr.GatewayDescriptor) error {
 	transportLocalAnnounceDebug.Tracef("Announcing gateway %s with %d services",
 		gatewayDescriptor.Name, len(gatewayDescriptor.ServiceDescriptors))
 
-	c.mu.RLock()
-	handlerCount := len(c.gatewayAnnounceHandlers)
-	handlers := make([]func(gatewayDescriptor *zephyr.GatewayDescriptor), 0, len(c.gatewayAnnounceHandlers))
-	for _, handler := range c.gatewayAnnounceHandlers {
+	t.mu.RLock()
+	handlers := make([]func(gatewayDescriptor *zephyr.GatewayDescriptor), 0, len(t.gatewayAnnounceHandlers))
+	for _, handler := range t.gatewayAnnounceHandlers {
 		handlers = append(handlers, handler)
 	}
-	c.mu.RUnlock()
-	transportLocalAnnounceDebug.Tracef("Notifying %d gateway announcement handlers", handlerCount)
+	t.mu.RUnlock()
 
+	transportLocalAnnounceDebug.Tracef("Notifying %d gateway announcement handlers", len(handlers))
 	for _, handler := range handlers {
 		handler(gatewayDescriptor)
 	}
 
-	transportLocalAnnounceDebug.Trace("Gateway announcement completed")
 	return nil
 }
 
-func (c *LocalTransport) HandleGatewayAnnouncements(ctx context.Context, ready chan<- struct{}, handler func(gatewayDescriptor *zephyr.GatewayDescriptor)) error {
-	transportLocalAnnounceDebug.Trace("Handling gateway announcements")
-	c.mu.Lock()
-	id := c.registerHandler()
-	c.gatewayAnnounceHandlers[id] = handler
-	transportLocalAnnounceDebug.Tracef("Now have %d gateway announcement handlers", len(c.gatewayAnnounceHandlers))
-	c.mu.Unlock()
-	signalReady(ready)
+func (t *LocalTransport) SubscribeGatewayAnnouncements(_ context.Context, handler func(gatewayDescriptor *zephyr.GatewayDescriptor)) (zephyr.Subscription, error) {
+	transportLocalAnnounceDebug.Trace("Subscribing to gateway announcements")
+	t.mu.Lock()
+	id := t.registerHandlerID()
+	t.gatewayAnnounceHandlers[id] = handler
+	t.mu.Unlock()
 
-	<-ctx.Done()
-	c.mu.Lock()
-	transportLocalAnnounceDebug.Tracef("Unbinding %d gateway announcement handlers", len(c.gatewayAnnounceHandlers))
-	delete(c.gatewayAnnounceHandlers, id)
-	c.mu.Unlock()
-	return nil
+	return untilDone(func() {
+		transportLocalAnnounceDebug.Trace("Unsubscribing from gateway announcements")
+		t.mu.Lock()
+		delete(t.gatewayAnnounceHandlers, id)
+		t.mu.Unlock()
+	}), nil
 }

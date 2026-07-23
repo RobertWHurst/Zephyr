@@ -8,6 +8,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/telemetrytv/trace v1.2.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
+	golang.org/x/sync v0.22.0
 )
 
 require (
