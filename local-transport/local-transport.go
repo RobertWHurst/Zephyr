@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/RobertWHurst/zephyr"
+	"github.com/RobertWHurst/zephyr/v2"
 	"github.com/telemetrytv/trace"
 )
 

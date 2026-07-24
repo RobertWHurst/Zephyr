@@ -3,7 +3,7 @@ package localtransport
 import (
 	"context"
 
-	"github.com/RobertWHurst/zephyr"
+	"github.com/RobertWHurst/zephyr/v2"
 )
 
 func (t *LocalTransport) AnnounceGateway(gatewayDescriptor *zephyr.GatewayDescriptor) error {

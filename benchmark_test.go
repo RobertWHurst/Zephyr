@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/RobertWHurst/navaros"
-	"github.com/RobertWHurst/zephyr"
+	"github.com/RobertWHurst/zephyr/v2"
 	"github.com/nats-io/nats.go"
 )
 

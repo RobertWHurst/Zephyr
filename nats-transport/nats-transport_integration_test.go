@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RobertWHurst/zephyr"
-	natstransport "github.com/RobertWHurst/zephyr/nats-transport"
+	"github.com/RobertWHurst/zephyr/v2"
+	natstransport "github.com/RobertWHurst/zephyr/v2/nats-transport"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"

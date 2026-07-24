@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RobertWHurst/zephyr"
+	"github.com/RobertWHurst/zephyr/v2"
 )
 
 // startService runs service.Listen in the background and waits for the

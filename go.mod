@@ -1,4 +1,4 @@
-module github.com/RobertWHurst/zephyr
+module github.com/RobertWHurst/zephyr/v2
 
 go 1.25.0
 

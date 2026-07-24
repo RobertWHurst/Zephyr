@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/RobertWHurst/zephyr"
+	"github.com/RobertWHurst/zephyr/v2"
 )
 
 func (t *LocalTransport) Dispatch(serviceName string, responseWriter http.ResponseWriter, request *http.Request) error {

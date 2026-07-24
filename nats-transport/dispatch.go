@@ -11,7 +11,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/RobertWHurst/zephyr"
+	"github.com/RobertWHurst/zephyr/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/telemetrytv/trace"
 	"github.com/vmihailenco/msgpack/v5"

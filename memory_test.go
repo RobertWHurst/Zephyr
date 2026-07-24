@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/RobertWHurst/zephyr"
-	localtransport "github.com/RobertWHurst/zephyr/local-transport"
-	natstransport "github.com/RobertWHurst/zephyr/nats-transport"
+	"github.com/RobertWHurst/zephyr/v2"
+	localtransport "github.com/RobertWHurst/zephyr/v2/local-transport"
+	natstransport "github.com/RobertWHurst/zephyr/v2/nats-transport"
 )
 
 // TestIterativeMemoryGrowth_Local runs multiple iterations and checks for memory growth using local transport

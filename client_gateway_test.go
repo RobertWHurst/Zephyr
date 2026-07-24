@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/RobertWHurst/navaros"
-	"github.com/RobertWHurst/zephyr"
-	localtransport "github.com/RobertWHurst/zephyr/local-transport"
+	"github.com/RobertWHurst/zephyr/v2"
+	localtransport "github.com/RobertWHurst/zephyr/v2/local-transport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
