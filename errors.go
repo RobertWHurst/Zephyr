@@ -15,4 +15,8 @@ var (
 	// transport was provided. Local services attached directly to a gateway
 	// are driven by the gateway and must not be started on their own.
 	ErrNoTransport = errors.New("zephyr: no transport provided")
+
+	// ErrNoRouteMetadata is returned by RouteDescriptor.UnmarshalMetadata
+	// when the route has no metadata attached.
+	ErrNoRouteMetadata = errors.New("zephyr: route has no metadata")
 )
