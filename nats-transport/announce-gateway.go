@@ -5,12 +5,12 @@ import (
 
 	"github.com/RobertWHurst/zephyr/v2"
 	"github.com/nats-io/nats.go"
-	"github.com/telemetrytv/trace"
+	"github.com/telemetryos/go-debug/debug"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
 var (
-	transportNatsAnnounceDebug = trace.Bind("zephyr:transport:nats:announce")
+	transportNatsAnnounceDebug = debug.Bind("zephyr:transport:nats:announce")
 )
 
 func (t *NatsTransport) AnnounceGateway(gatewayDescriptor *zephyr.GatewayDescriptor) error {

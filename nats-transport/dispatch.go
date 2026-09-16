@@ -13,13 +13,13 @@ import (
 
 	"github.com/RobertWHurst/zephyr/v2"
 	"github.com/nats-io/nats.go"
-	"github.com/telemetrytv/trace"
+	"github.com/telemetryos/go-debug/debug"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
 var (
-	transportNatsDebug         = trace.Bind("zephyr:transport:nats")
-	transportNatsDispatchDebug = trace.Bind("zephyr:transport:nats:dispatch")
+	transportNatsDebug         = debug.Bind("zephyr:transport:nats")
+	transportNatsDispatchDebug = debug.Bind("zephyr:transport:nats:dispatch")
 )
 
 const DispatchTimeout = 30 * time.Second

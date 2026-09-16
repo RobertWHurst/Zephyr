@@ -8,12 +8,12 @@ import (
 	"strings"
 
 	"github.com/RobertWHurst/navaros"
-	"github.com/telemetrytv/trace"
+	"github.com/telemetryos/go-debug/debug"
 )
 
 var (
-	clientRequestDebug = trace.Bind("zephyr:client:request")
-	clientServeDebug   = trace.Bind("zephyr:client:serve")
+	clientRequestDebug = debug.Bind("zephyr:client:request")
+	clientServeDebug   = debug.Bind("zephyr:client:serve")
 )
 
 // Client can make requests to services.

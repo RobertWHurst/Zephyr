@@ -7,14 +7,14 @@ import (
 	"slices"
 
 	"github.com/RobertWHurst/navaros"
-	"github.com/telemetrytv/trace"
+	"github.com/telemetryos/go-debug/debug"
 	"golang.org/x/sync/errgroup"
 )
 
 var (
-	serviceDebug         = trace.Bind("zephyr:service")
-	serviceAnnounceDebug = trace.Bind("zephyr:service:announce")
-	serviceHandleDebug   = trace.Bind("zephyr:service:handler")
+	serviceDebug         = debug.Bind("zephyr:service")
+	serviceAnnounceDebug = debug.Bind("zephyr:service:announce")
+	serviceHandleDebug   = debug.Bind("zephyr:service:handler")
 )
 
 // Service is a struct that facilitates communication between a go microservice

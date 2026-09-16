@@ -7,7 +7,7 @@ require (
 	github.com/nats-io/nats-server/v2 v2.14.3
 	github.com/nats-io/nats.go v1.51.0
 	github.com/stretchr/testify v1.11.1
-	github.com/telemetrytv/trace v1.2.0
+	github.com/telemetryos/go-debug v1.5.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	golang.org/x/sync v0.22.0
 )
