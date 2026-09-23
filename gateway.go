@@ -10,14 +10,14 @@ import (
 	"time"
 
 	"github.com/RobertWHurst/navaros"
-	"github.com/telemetrytv/trace"
+	"github.com/telemetryos/go-debug/debug"
 	"golang.org/x/sync/errgroup"
 )
 
 var (
-	gatewayDebug        = trace.Bind("zephyr:gateway")
-	gatewayRouteDebug   = trace.Bind("zephyr:gateway:route")
-	gatewayIndexerDebug = trace.Bind("zephyr:gateway:indexer")
+	gatewayDebug        = debug.Bind("zephyr:gateway")
+	gatewayRouteDebug   = debug.Bind("zephyr:gateway:route")
+	gatewayIndexerDebug = debug.Bind("zephyr:gateway:indexer")
 )
 
 // GatewayAnnounceInterval is the default interval between gateway

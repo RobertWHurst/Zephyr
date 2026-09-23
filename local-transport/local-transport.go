@@ -6,13 +6,13 @@ import (
 	"sync"
 
 	"github.com/RobertWHurst/zephyr/v2"
-	"github.com/telemetrytv/trace"
+	"github.com/telemetryos/go-debug/debug"
 )
 
 var (
-	transportLocalDebug         = trace.Bind("zephyr:transport:local")
-	transportLocalDispatchDebug = trace.Bind("zephyr:transport:local:dispatch")
-	transportLocalAnnounceDebug = trace.Bind("zephyr:transport:local:announce")
+	transportLocalDebug         = debug.Bind("zephyr:transport:local")
+	transportLocalDispatchDebug = debug.Bind("zephyr:transport:local:dispatch")
+	transportLocalAnnounceDebug = debug.Bind("zephyr:transport:local:announce")
 )
 
 // LocalTransport is an in-process transport for development and testing.
